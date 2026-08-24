@@ -61,6 +61,10 @@ export function create_peer_connection(
   let pending_remote_candidates: RTCIceCandidateInit[] = [];
 
   function wire_data_channel(channel: RTCDataChannel): void {
+    // Chunk data should arrive as ArrayBuffer, not Blob (the spec default),
+    // so file_receiver.mts can hand it straight to chunking.mts without an
+    // extra async Blob.arrayBuffer() step per message.
+    channel.binaryType = "arraybuffer";
     data_channel = channel;
     channel.addEventListener("open", () => {
       handlers.on_data_channel_open?.(channel);
