@@ -1,28 +1,30 @@
 {
-  "name": "hopdrop-client",
-  "private": true,
-  "type": "module",
-  "scripts": {
+	"name": "hopdrop-client",
+	"private": true,
+	"type": "module",
+	"scripts": {
 		"test": "node --import tsx --test test/**/*.test.mts",
-  	"dev": "vite --config config/vite.config.ts",
-  	"build": "tsc --noEmit -p config/tsconfig.build.json && vite build --config config/vite.config.ts",
-  	"preview": "vite preview --config config/vite.config.ts",
-		"lint": "eslint --config config/eslint.config.mjs ."
+		"dev": "vite --config config/vite.config.ts",
+		"build": "tsc --noEmit -p config/tsconfig.build.json && vite build --config config/vite.config.ts",
+		"preview": "vite preview --config config/vite.config.ts",
+		"lint": "eslint --config config/eslint.config.mjs .",
+		"prepare": "husky"
 	},
-  "devDependencies": {
-    "vite": "^6.0.0",
-    "typescript": "^5.7.0",
-    "typescript-eslint": "^8.0.0",
+	"devDependencies": {
+		"vite": "^6.0.0",
+		"typescript": "^5.7.0",
+		"typescript-eslint": "^8.0.0",
 		"husky": "^9.1.7",
 		"tsx": "^4.21.0",
+		"prettier": "^3.8.3",
 		"@types/node": "^22.10.0",
-    "@eslint/js": "^9.0.0",
-    "eslint-config-prettier": "^9.0.0"
-  },
+		"@eslint/js": "^9.0.0",
+		"eslint-config-prettier": "^9.0.0"
+	},
 	"lint-staged": {
-    "**/*.mts": [
-      "eslint --fix --config config/eslint.config.mjs",
-      "prettier --write --config config/.prettierrc"
-    ]
-  }
+		"**/*.mts": [
+			"eslint --fix --config config/eslint.config.mjs",
+			"prettier --write --config config/.prettierrc"
+		]
+	}
 }
