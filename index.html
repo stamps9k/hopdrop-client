@@ -1,12 +1,47 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="utf-8" />
     <title>hopdrop</title>
+    <style>
+      body { font-family: monospace; margin: 1rem; }
+      #controls { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; align-items: center; }
+      #transfer-controls { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; flex-wrap: wrap; }
+      input { font-family: inherit; }
+      #status { margin-bottom: 0.5rem; font-weight: bold; }
+      #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 1rem; height: 45vh; overflow-y: auto; margin-bottom: 0.5rem; }
+      #downloads { background: #222; color: #eee; padding: 0.75rem; min-height: 2rem; }
+      #downloads a { color: #6cf; display: block; margin: 0.25rem 0; }
+      .verified { color: #6f6; }
+      .unverified { color: #f66; }
+      progress { width: 200px; }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <h3>hopdrop</h3>
+    <div id="status">not connected</div>
+
+    <div id="controls">
+      <input id="ws-url" size="30" value="ws://localhost:8080" />
+      <button id="connect">connect</button>
+      <input id="room-code" placeholder="room code (blank = create)" size="20" />
+      <button id="join">join</button>
+      <button id="leave">leave</button>
+    </div>
+
+    <div id="transfer-controls">
+      <select id="peer-select"><option value="">(no open channels yet)</option></select>
+      <input id="file-input" type="file" />
+      <button id="send-file">send file</button>
+      <progress id="send-progress" value="0" max="100" style="display: none;"></progress>
+      <span id="send-progress-label"></span>
+    </div>
+
+    <div id="log"></div>
+
+    <h4>received files</h4>
+    <div id="downloads"></div>
+
+    <script type="module" src="./src/index.mts"></script>
   </body>
 </html>
