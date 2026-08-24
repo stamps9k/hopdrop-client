@@ -7,7 +7,7 @@ export default [
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['**/*.ts'],
+    files: ['**/*.mts'],
     languageOptions: {
       globals: {
         window: 'readonly',
