@@ -15,5 +15,11 @@
 		"husky": "^9.1.7",
     "@eslint/js": "^9.0.0",
     "eslint-config-prettier": "^9.0.0"
+  },
+	"lint-staged": {
+    "**/*.mts": [
+      "eslint --fix --config config/eslint.config.mjs",
+      "prettier --write --config config/.prettierrc"
+    ]
   }
 }
