@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
   	"dev": "vite --config config/vite.config.ts",
-  	"build": "tsc --noEmit -p config/tsconfig.json && vite build --config config/vite.config.ts",
+  	"build": "tsc --noEmit -p config/tsconfig.build.json && vite build --config config/vite.config.ts",
   	"preview": "vite preview --config config/vite.config.ts",
 		"lint": "eslint --config config/eslint.config.mjs ."
 	},
