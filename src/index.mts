@@ -4,6 +4,11 @@
 // manipulation. This file owns state and orchestration; room_ui.mts owns
 // presentation.
 
+import "bootstrap/dist/css/bootstrap.min.css";
+import "bootstrap-icons/font/bootstrap-icons.min.css";
+import "bootstrap/dist/js/bootstrap.bundle.min.js";
+import "../styles/cover.css";
+
 import {
   create_signaling_socket,
   type SignalingSocket,
@@ -132,7 +137,8 @@ async function initiate_offer_if_caller(device_id: string): Promise<void> {
 function connect_to_signaling(url: string): void {
   socket = create_signaling_socket(url, {
     on_open: () => {
-      ui.set_status("connected to signaling");
+      ui.set_status("Connected to signaling");
+      ui.set_connected_status();
       ui.log("signaling OPEN");
       if (pending_auto_join !== undefined) {
         const { room_code, device_name } = pending_auto_join;
@@ -145,7 +151,7 @@ function connect_to_signaling(url: string): void {
       }
     },
     on_close: (event) => {
-      ui.set_status("disconnected");
+      ui.set_status("Disconnected");
       ui.log("signaling CLOSE", { code: event.code, reason: event.reason });
     },
     on_socket_error: () => ui.log("signaling SOCKET ERROR"),
@@ -153,9 +159,10 @@ function connect_to_signaling(url: string): void {
 
     on_room_created: (message) => {
       ui.set_status(
-        `room ${message.room_code} - I am "${message.device_name}"`,
+        `Room ${message.room_code} - I am "${message.device_name}"`,
       );
       ui.log("room-created", message);
+      ui.set_room_status(true);
       ui.prefill_room_code(message.room_code);
       const join_url = build_join_url(window.location.href, message.room_code);
       void ui.show_join_qr_code(join_url);
@@ -163,13 +170,17 @@ function connect_to_signaling(url: string): void {
 
     on_room_joined: async (message) => {
       ui.set_status(
-        `room ${message.room_code} - I am "${message.device_name}"`,
+        `Room ${message.room_code} - I am "${message.device_name}"`,
       );
       ui.log("room-joined", message);
+      ui.set_room_status(true);
       const peers = register_existing_peers(message);
       for (const peer of peers) {
         await initiate_offer_if_caller(peer.device_id);
       }
+      const join_url = build_join_url(window.location.href, message.room_code);
+      await ui.show_join_qr_code(join_url);
+      ui.collapse_join_qr_code();
     },
 
     on_peer_joined: (message) => {
@@ -256,6 +267,7 @@ const ui = create_room_ui({
   on_leave() {
     socket?.leave();
     ui.log("sent leave");
+    ui.set_room_status(false);
     for (const pc of peer_connections.values()) {
       pc.close();
     }
@@ -291,7 +303,7 @@ const ui = create_room_ui({
       },
       on_complete: (file_name) => {
         ui.log(`send complete: ${file_name}`);
-        ui.set_send_progress(100, `${file_name}: done`);
+        ui.set_send_progress(100, `${file_name}`);
       },
       on_error: (error) => {
         ui.log("send error", error.message);

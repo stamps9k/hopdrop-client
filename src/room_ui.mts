@@ -35,6 +35,8 @@ export interface RoomUiCallbacks {
 
 export interface RoomUi {
   set_status(text: string): void;
+  set_connected_status(): void;
+  set_room_status(joined: boolean): void;
   log(label: string, data?: unknown): void;
   set_peer_options(peers: PeerOption[]): void;
   set_send_progress(percent: number, label: string): void;
@@ -64,10 +66,12 @@ function require_element<T extends HTMLElement>(id: string): T {
 export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const ws_url_input = require_element<HTMLInputElement>("ws-url");
   const connect_button = require_element<HTMLButtonElement>("connect");
+  const connect_status_el = require_element<HTMLElement>("connect-status");
   const device_name_input = require_element<HTMLInputElement>("device-name");
   const room_code_input = require_element<HTMLInputElement>("room-code");
   const join_button = require_element<HTMLButtonElement>("join");
   const leave_button = require_element<HTMLButtonElement>("leave");
+  const room_status_el = require_element<HTMLElement>("room-status");
   const status_el = require_element<HTMLElement>("status");
   const peer_select = require_element<HTMLSelectElement>("peer-select");
   const file_input = require_element<HTMLInputElement>("file-input");
@@ -79,6 +83,7 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   );
   const log_el = require_element<HTMLElement>("log");
   const downloads_el = require_element<HTMLElement>("downloads");
+  let downloads_has_content = false;
   const join_link_el = require_element<HTMLElement>("join-link");
   const qr_code_el = require_element<HTMLElement>("qr-code");
   const qr_details_el = require_element<HTMLDetailsElement>("qr-details");
@@ -134,6 +139,21 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       status_el.textContent = text;
     },
 
+    set_connected_status() {
+      connect_status_el.classList.remove("bi-x-circle");
+      connect_status_el.classList.add("bi-hand-thumbs-up-fill");
+    },
+
+    set_room_status(joined: boolean) {
+      if (joined) {
+        room_status_el.classList.remove("bi-x-circle");
+        room_status_el.classList.add("bi-hand-thumbs-up-fill");
+      } else {
+        room_status_el.classList.remove("bi-hand-thumbs-up-fill");
+        room_status_el.classList.add("bi-x-circle");
+      }
+    },
+
     log: ui_log,
 
     set_peer_options(peers) {
@@ -165,14 +185,23 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
     },
 
     add_downloaded_file(file_name, url, hash_verified) {
+      if (!downloads_has_content) {
+        downloads_el.innerHTML = "";
+        downloads_has_content = true;
+      }
+
       const link = document.createElement("a");
       link.href = url;
       link.download = file_name;
-      link.className = hash_verified ? "verified" : "unverified";
+      link.className = hash_verified
+        ? "verified link-light"
+        : "unverified link-light";
       link.textContent = `${file_name} ${
         hash_verified ? "(hash verified)" : "(HASH MISMATCH)"
       }`;
-      downloads_el.appendChild(link);
+      const li = document.createElement("li");
+      li.appendChild(link);
+      downloads_el.appendChild(li);
     },
 
     get_signaling_url() {

@@ -2,57 +2,149 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>hopdrop</title>
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hopdrop</title>
     <style>
-      body { font-family: monospace; margin: 1rem; }
+      /*
+			body { font-family: monospace; margin: 1rem; }
       #controls { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; align-items: center; }
       #transfer-controls { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center; flex-wrap: wrap; }
       input { font-family: inherit; }
       #status { margin-bottom: 0.5rem; font-weight: bold; }
-      #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 1rem; height: 45vh; overflow-y: auto; margin-bottom: 0.5rem; }
-      #downloads { background: #222; color: #eee; padding: 0.75rem; min-height: 2rem; }
+      */
+			#log { white-space: pre-wrap; background: #111; padding: 1rem; height: 45vh; overflow-y: auto; margin-bottom: 0.5rem; }
+      /*
+			#downloads { background: #222; color: #eee; padding: 0.75rem; min-height: 2rem; }
       #downloads a { color: #6cf; display: block; margin: 0.25rem 0; }
       .verified { color: #6f6; }
       .unverified { color: #f66; }
       progress { width: 200px; }
       #qr-code { margin: 0.5rem 0; }
-      #qr-code svg { width: 200px; height: 200px; }
-      #join-link { font-size: 0.85rem; color: #888; word-break: break-all; }
+      */
+			#qr-code svg { width: 200px; height: 200px; }
+      /*
+			#join-link { font-size: 0.85rem; color: #888; word-break: break-all; }
       #qr-details summary { cursor: pointer; margin-bottom: 0.25rem; }
+			*/
     </style>
   </head>
-  <body>
-    <h3>hopdrop</h3>
-    <div id="status">not connected</div>
+  <body class="d-flex h-100 text-center text-bg-dark">
+		<div class="cover-container d-flex w-100 h-100 p-3 mx-auto flex-column">
+      <header class="mb-auto">
+        <div>
+          <a class="text-white" href="index.html"
+            ><h3 class="float-md-start mb-0">Stampatron</h3></a
+          >
+          <nav class="nav nav-masthead justify-content-center float-md-end">
+            <a
+              class="nav-link fw-bold py-1 px-0"
+              href="https://stampatron.com/index.html"
+              >Home</a
+            >
+            <a
+              class="nav-link fw-bold py-1 px-0 active"
+              aria-current="page"
+              href="https://stampatron.com/projects.html"
+              >Projects</a
+            >
+            <a
+              class="nav-link fw-bold py-1 px-0"
+              href="https://stampatron.com/cv.html"
+              >CV</a
+            >
+            <a
+              class="nav-link fw-bold py-1 px-0"
+              href="https://stampatron.com/contact.html"
+              >Contact</a
+            >
+          </nav>
+        </div>
+      </header>
+			<h1>Hopdrop</h1>
+			<div class="card text-start">
+				<div class="card-header">
+    			<ul class="nav nav-tabs card-header-tabs" id="hopdrop-tabs" role="tablist">
+						<li class="nav-item presentation">
+        			<button class="nav-link active" id="connect-tab" data-bs-toggle="tab" data-bs-target="#connect-pane" type="button" role="tab" aria-controls="connect-pane" aria-selected="true">Connect</button>
+						</li>
+						<li class="nav-item presentation">
+        			<button class="nav-link" id="send-tab" data-bs-toggle="tab" data-bs-target="#send-pane" type="button" role="tab" aria-controls="send-pane" aria-selected="false">Send</button>
+						</li>
+						<li class="nav-item presentation">
+        			<button class="nav-link" id="send-tab" data-bs-toggle="tab" data-bs-target="#log-pane" type="button" role="tab" aria-controls="send-pane" aria-selected="false">Logs</button>
+						</li>
+					</ul>
+				</div>
+				
+				<div class="card-body tab-content">
+					<div class="tab-pane fade show active" id="connect-pane" role="tabpanel" aria-labelledby="connect-tab" tabindex="0">
+						<div class="row p-1">
+							<div id="controls-connect" class="text-start col-8">
+								<input id="ws-url" size="30" value="ws://localhost:3000" />
+							</div>
+							<div class="text-start col-2">
+								<button id="connect">connect</button>
+							</div>
+							<div class=" text-start col-2">
+								<i id="connect-status" class="bi bi-x-circle"></i>
+							</div>
+						</div>
+						<div class="row p-1">
+							<div id="control-app" class="text-start col-8">
+								<input id="device-name" placeholder="your device name" size="18" maxlength="40" />
+								<input id="room-code" placeholder="room code (blank = create)" size="20" />
+							</div>
+							<div class="text-start col-2">
+								<button id="join">join</button>
+								<button id="leave">leave</button>
+							</div>
+							<div class="text-start col-2">
+									<i id="room-status" class="bi bi-x-circle"></i>
+							</div>
+						</div>
+					</div>
 
-    <div id="controls">
-      <input id="ws-url" size="30" value="ws://localhost:3000" />
-      <button id="connect">connect</button>
-      <input id="device-name" placeholder="your device name" size="18" maxlength="40" />
-      <input id="room-code" placeholder="room code (blank = create)" size="20" />
-      <button id="join">join</button>
-      <button id="leave">leave</button>
-    </div>
-
-    <details id="qr-details">
-      <summary>Show QR code / join link</summary>
-      <div id="qr-code"></div>
-      <div id="join-link"></div>
-    </details>
-
-    <div id="transfer-controls">
-      <select id="peer-select"><option value="">(no open channels yet)</option></select>
-      <input id="file-input" type="file" />
-      <button id="send-file">send file</button>
-      <progress id="send-progress" value="0" max="100" style="display: none;"></progress>
-      <span id="send-progress-label"></span>
-    </div>
-
-    <div id="log"></div>
-
-    <h4>received files</h4>
-    <div id="downloads"></div>
-
-    <script type="module" src="./src/index.mts"></script>
+					<div class="tab-pane fade" id="send-pane" role="tabpanel" aria-labelledby="connect-tab" tabindex="0">
+						<div class="row p-1">
+							<h6>Recipient</h6>
+							<div id="transfer-controls" class="text-start col-sm">
+								<select id="peer-select"><option value="">(no open channels yet)</option></select>
+							</div>
+						</div>
+						<div class="row p-1">
+							<h6>File</h6>
+							<div class="col-4">
+								<input id="file-input" type="file" />
+							</div>
+							<div class="col-2">
+								<button id="send-file">send file</button>
+							</div>
+							<div class="col-6">
+								<progress id="send-progress" value="0" max="100" style="display: none;"></progress>
+								<span id="send-progress-label"></span>
+							</div>
+						</div>
+					</div>
+					<div class="tab-pane fade" id="log-pane" role="tabpanel" aria-labelledby="connect-tab" tabindex="0">
+						<div id="log" class="text-start text-terminal"></div>
+					</div>
+				</div>
+			</div>
+			<div id="status" class="text-terminal text-start">Not connected</div>
+			<div class="row p-1">
+				<details id="qr-details">
+					<summary>Show QR code / join link</summary>
+					<div id="qr-code"></div>
+					<div id="join-link"></div>
+				</details>
+			</div>
+			<div class="border border-light card-body p-1 text-start">
+				<h6>Received Files</h6>
+				<ul id="downloads">
+					<li>Nothing yet</li>
+				</ul>
+			</div>
+			<script type="module" src="./src/index.mts"></script>
+		</div>
   </body>
 </html>

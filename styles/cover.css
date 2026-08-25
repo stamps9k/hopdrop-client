@@ -44,6 +44,16 @@
   border-color: #333;
 }
 
+/* Custom text for things that need to pop against the dark background */
+.text-terminal {
+	color: #0f0;
+}
+
+/* Custom underline for heading 6 */
+h6 {
+	text-decoration: underline;
+}
+
 /*
  * Base structure
  */
