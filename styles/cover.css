@@ -49,6 +49,21 @@
 	color: #0f0;
 }
 
+/* Special size for the qr-vode svg image */
+#qr-code svg { 
+	width: 200px; height: 200px; 
+}
+
+/* Special custom styling for the webapp logs */
+#log { 
+	white-space: pre-wrap; 
+	background: #111; 
+	padding: 1rem; 
+	height: 45vh; 
+	overflow-y: auto; 
+	margin-bottom: 0.5rem; 
+}
+
 /* Custom underline for heading 6 */
 h6 {
 	text-decoration: underline;
