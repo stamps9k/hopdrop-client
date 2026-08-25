@@ -40,7 +40,7 @@ export interface SignalingSocketHandlers {
 }
 
 export interface SignalingSocket {
-  join(room_code?: string): void;
+  join(device_name: string, room_code?: string): void;
   leave(): void;
   send_offer(target_device_id: string, payload: unknown): void;
   send_answer(target_device_id: string, payload: unknown): void;
@@ -122,8 +122,8 @@ export function create_signaling_socket(
   }
 
   return {
-    join(room_code) {
-      send_raw(build_join_message(room_code));
+    join(device_name, room_code) {
+      send_raw(build_join_message(device_name, room_code));
     },
     leave() {
       send_raw(build_leave_message());

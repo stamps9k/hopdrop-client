@@ -16,19 +16,34 @@ beforeEach(() => {
 });
 
 describe("register_existing_peers", () => {
-  test("assigns role caller with offer_sent false to each peer_device_id", () => {
+  test("assigns role caller with offer_sent false to each peer, carrying its name", () => {
     const states = register_existing_peers({
       type: "room-joined",
       room_code: "AB12",
       device_id: "me",
-      peer_device_ids: ["d1", "d2"],
+      device_name: "Me",
+      peer_devices: [
+        { device_id: "d1", device_name: "Peer 1" },
+        { device_id: "d2", device_name: "Peer 2" },
+      ],
     });
     assert.deepEqual(states, [
-      { device_id: "d1", role: "caller", offer_sent: false },
-      { device_id: "d2", role: "caller", offer_sent: false },
+      {
+        device_id: "d1",
+        device_name: "Peer 1",
+        role: "caller",
+        offer_sent: false,
+      },
+      {
+        device_id: "d2",
+        device_name: "Peer 2",
+        role: "caller",
+        offer_sent: false,
+      },
     ]);
     assert.deepEqual(get_peer_state("d1"), {
       device_id: "d1",
+      device_name: "Peer 1",
       role: "caller",
       offer_sent: false,
     });
@@ -39,7 +54,8 @@ describe("register_existing_peers", () => {
       type: "room-joined",
       room_code: "AB12",
       device_id: "me",
-      peer_device_ids: [],
+      device_name: "Me",
+      peer_devices: [],
     });
     assert.deepEqual(states, []);
     assert.deepEqual(list_known_peers(), []);
@@ -50,7 +66,8 @@ describe("register_existing_peers", () => {
       type: "room-joined",
       room_code: "AB12",
       device_id: "me",
-      peer_device_ids: ["d1"],
+      device_name: "Me",
+      peer_devices: [{ device_id: "d1", device_name: "Peer 1" }],
     });
     mark_offer_sent("d1");
 
@@ -58,7 +75,8 @@ describe("register_existing_peers", () => {
       type: "room-joined",
       room_code: "AB12",
       device_id: "me",
-      peer_device_ids: ["d1"],
+      device_name: "Me",
+      peer_devices: [{ device_id: "d1", device_name: "Peer 1" }],
     });
 
     assert.equal(get_peer_state("d1")?.offer_sent, true);
@@ -66,16 +84,33 @@ describe("register_existing_peers", () => {
 });
 
 describe("register_new_peer", () => {
-  test("assigns role callee with offer_sent false", () => {
-    const state = register_new_peer({ type: "peer-joined", device_id: "d3" });
-    assert.deepEqual(state, { device_id: "d3", role: "callee", offer_sent: false });
+  test("assigns role callee with offer_sent false, carrying its name", () => {
+    const state = register_new_peer({
+      type: "peer-joined",
+      device_id: "d3",
+      device_name: "Peer 3",
+    });
+    assert.deepEqual(state, {
+      device_id: "d3",
+      device_name: "Peer 3",
+      role: "callee",
+      offer_sent: false,
+    });
     assert.deepEqual(get_peer_state("d3"), state);
   });
 
   test("is idempotent - a duplicate peer-joined does not change existing state", () => {
-    const first = register_new_peer({ type: "peer-joined", device_id: "d3" });
+    const first = register_new_peer({
+      type: "peer-joined",
+      device_id: "d3",
+      device_name: "Peer 3",
+    });
     mark_offer_sent("d3"); // shouldn't normally happen for a callee, but exercises idempotency regardless
-    const second = register_new_peer({ type: "peer-joined", device_id: "d3" });
+    const second = register_new_peer({
+      type: "peer-joined",
+      device_id: "d3",
+      device_name: "Peer 3",
+    });
     assert.equal(second, first);
     assert.equal(get_peer_state("d3")?.offer_sent, true);
   });
@@ -87,13 +122,18 @@ describe("should_send_offer", () => {
       type: "room-joined",
       room_code: "AB12",
       device_id: "me",
-      peer_device_ids: ["d1"],
+      device_name: "Me",
+      peer_devices: [{ device_id: "d1", device_name: "Peer 1" }],
     });
     assert.equal(should_send_offer("d1"), true);
   });
 
   test("false for a callee", () => {
-    register_new_peer({ type: "peer-joined", device_id: "d2" });
+    register_new_peer({
+      type: "peer-joined",
+      device_id: "d2",
+      device_name: "Peer 2",
+    });
     assert.equal(should_send_offer("d2"), false);
   });
 
@@ -106,7 +146,8 @@ describe("should_send_offer", () => {
       type: "room-joined",
       room_code: "AB12",
       device_id: "me",
-      peer_device_ids: ["d1"],
+      device_name: "Me",
+      peer_devices: [{ device_id: "d1", device_name: "Peer 1" }],
     });
     mark_offer_sent("d1");
     assert.equal(should_send_offer("d1"), false);
@@ -121,8 +162,12 @@ describe("mark_offer_sent", () => {
 
 describe("remove_peer", () => {
   test("removes tracked state so get_peer_state returns undefined", () => {
-    register_new_peer({ type: "peer-joined", device_id: "d4" });
-    remove_peer({ type: "peer-left", device_id: "d4" });
+    register_new_peer({
+      type: "peer-joined",
+      device_id: "d4",
+      device_name: "Peer 4",
+    });
+    remove_peer({ type: "peer-left", device_id: "d4", device_name: "Peer 4" });
     assert.equal(get_peer_state("d4"), undefined);
   });
 
@@ -131,14 +176,21 @@ describe("remove_peer", () => {
       type: "room-joined",
       room_code: "AB12",
       device_id: "me",
-      peer_device_ids: ["d1"],
+      device_name: "Me",
+      peer_devices: [{ device_id: "d1", device_name: "Peer 1" }],
     });
-    remove_peer({ type: "peer-left", device_id: "d1" });
+    remove_peer({ type: "peer-left", device_id: "d1", device_name: "Peer 1" });
     assert.equal(should_send_offer("d1"), false);
   });
 
   test("removing an unknown device_id does not throw", () => {
-    assert.doesNotThrow(() => remove_peer({ type: "peer-left", device_id: "ghost" }));
+    assert.doesNotThrow(() =>
+      remove_peer({
+        type: "peer-left",
+        device_id: "ghost",
+        device_name: "Ghost",
+      }),
+    );
   });
 });
 
@@ -148,15 +200,27 @@ describe("list_known_peers", () => {
       type: "room-joined",
       room_code: "AB12",
       device_id: "me",
-      peer_device_ids: ["d1", "d2"],
+      device_name: "Me",
+      peer_devices: [
+        { device_id: "d1", device_name: "Peer 1" },
+        { device_id: "d2", device_name: "Peer 2" },
+      ],
     });
-    register_new_peer({ type: "peer-joined", device_id: "d3" });
+    register_new_peer({
+      type: "peer-joined",
+      device_id: "d3",
+      device_name: "Peer 3",
+    });
 
     const peers = list_known_peers();
     assert.equal(peers.length, 3);
     assert.deepEqual(
       new Set(peers.map((p) => p.device_id)),
       new Set(["d1", "d2", "d3"]),
+    );
+    assert.deepEqual(
+      new Set(peers.map((p) => p.device_name)),
+      new Set(["Peer 1", "Peer 2", "Peer 3"]),
     );
   });
 });
@@ -167,7 +231,8 @@ describe("clear_all_negotiation_state", () => {
       type: "room-joined",
       room_code: "AB12",
       device_id: "me",
-      peer_device_ids: ["d1"],
+      device_name: "Me",
+      peer_devices: [{ device_id: "d1", device_name: "Peer 1" }],
     });
     clear_all_negotiation_state();
     assert.deepEqual(list_known_peers(), []);

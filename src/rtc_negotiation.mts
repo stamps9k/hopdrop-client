@@ -5,7 +5,7 @@
 //
 // Rule: for each peer, exactly one side initiates the offer, decided by how
 // that peer was discovered:
-//   - Peers listed in room-joined's peer_device_ids were already in the room
+//   - Peers listed in room-joined's peer_devices were already in the room
 //     before this device joined -> this device is the "caller" and initiates
 //     an offer to each of them.
 //   - Peers announced later via peer-joined joined *after* this device -> the
@@ -25,6 +25,7 @@ export type NegotiationRole = "caller" | "callee";
 
 export interface PeerNegotiationState {
   device_id: string;
+  device_name: string;
   role: NegotiationRole;
   offer_sent: boolean;
 }
@@ -33,6 +34,7 @@ const peer_roles = new Map<string, PeerNegotiationState>();
 
 function register_peer_if_absent(
   device_id: string,
+  device_name: string,
   role: NegotiationRole,
 ): PeerNegotiationState {
   const existing = peer_roles.get(device_id);
@@ -42,7 +44,12 @@ function register_peer_if_absent(
     // offer_sent, or we'd risk sending a second offer to the same peer.
     return existing;
   }
-  const state: PeerNegotiationState = { device_id, role, offer_sent: false };
+  const state: PeerNegotiationState = {
+    device_id,
+    device_name,
+    role,
+    offer_sent: false,
+  };
   peer_roles.set(device_id, state);
   return state;
 }
@@ -53,8 +60,8 @@ function register_peer_if_absent(
 export function register_existing_peers(
   room_joined: RoomJoinedMessage,
 ): PeerNegotiationState[] {
-  return room_joined.peer_device_ids.map((device_id) =>
-    register_peer_if_absent(device_id, "caller"),
+  return room_joined.peer_devices.map((peer) =>
+    register_peer_if_absent(peer.device_id, peer.device_name, "caller"),
   );
 }
 
@@ -63,7 +70,11 @@ export function register_existing_peers(
 export function register_new_peer(
   peer_joined: PeerJoinedMessage,
 ): PeerNegotiationState {
-  return register_peer_if_absent(peer_joined.device_id, "callee");
+  return register_peer_if_absent(
+    peer_joined.device_id,
+    peer_joined.device_name,
+    "callee",
+  );
 }
 
 // Call for each peer-left event to stop tracking that peer.

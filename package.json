@@ -11,20 +11,24 @@
 		"prepare": "husky"
 	},
 	"devDependencies": {
-		"vite": "^6.0.0",
+		"@eslint/js": "^9.0.0",
+		"@types/node": "^22.10.0",
+		"@types/qrcode": "^1.5.6",
+		"eslint-config-prettier": "^9.0.0",
+		"husky": "^9.1.7",
+		"prettier": "^3.8.3",
+		"tsx": "^4.21.0",
 		"typescript": "^5.7.0",
 		"typescript-eslint": "^8.0.0",
-		"husky": "^9.1.7",
-		"tsx": "^4.21.0",
-		"prettier": "^3.8.3",
-		"@types/node": "^22.10.0",
-		"@eslint/js": "^9.0.0",
-		"eslint-config-prettier": "^9.0.0"
+		"vite": "^6.0.0"
 	},
 	"lint-staged": {
 		"**/*.mts": [
 			"eslint --fix --config config/eslint.config.mjs",
 			"prettier --write --config config/.prettierrc"
 		]
+	},
+	"dependencies": {
+		"qrcode": "^1.5.4"
 	}
 }

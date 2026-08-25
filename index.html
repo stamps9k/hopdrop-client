@@ -15,6 +15,9 @@
       .verified { color: #6f6; }
       .unverified { color: #f66; }
       progress { width: 200px; }
+      #qr-code { margin: 0.5rem 0; }
+      #qr-code svg { width: 200px; height: 200px; }
+      #join-link { font-size: 0.85rem; color: #888; word-break: break-all; }
     </style>
   </head>
   <body>
@@ -22,12 +25,16 @@
     <div id="status">not connected</div>
 
     <div id="controls">
-      <input id="ws-url" size="30" value="ws://localhost:8080" />
+      <input id="ws-url" size="30" value="ws://localhost:3000" />
       <button id="connect">connect</button>
+      <input id="device-name" placeholder="your device name" size="18" maxlength="40" />
       <input id="room-code" placeholder="room code (blank = create)" size="20" />
       <button id="join">join</button>
       <button id="leave">leave</button>
     </div>
+
+    <div id="qr-code"></div>
+    <div id="join-link"></div>
 
     <div id="transfer-controls">
       <select id="peer-select"><option value="">(no open channels yet)</option></select>

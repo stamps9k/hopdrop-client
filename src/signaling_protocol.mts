@@ -9,6 +9,7 @@
 
 export interface JoinMessage {
   type: "join";
+  device_name: string;
   room_code?: string;
 }
 
@@ -34,23 +35,32 @@ export interface RoomCreatedMessage {
   type: "room-created";
   room_code: string;
   device_id: string;
+  device_name: string;
+}
+
+export interface PeerDeviceInfo {
+  device_id: string;
+  device_name: string;
 }
 
 export interface RoomJoinedMessage {
   type: "room-joined";
   room_code: string;
   device_id: string;
-  peer_device_ids: string[];
+  device_name: string;
+  peer_devices: PeerDeviceInfo[];
 }
 
 export interface PeerJoinedMessage {
   type: "peer-joined";
   device_id: string;
+  device_name: string;
 }
 
 export interface PeerLeftMessage {
   type: "peer-left";
   device_id: string;
+  device_name: string;
 }
 
 export interface RtcRelayMessage {
@@ -73,17 +83,21 @@ export type ServerMessage =
   | ServerErrorMessage;
 
 export type ParseServerMessageResult =
-  | { ok: true; message: ServerMessage }
-  | { ok: false; error: string };
+  { ok: true; message: ServerMessage } | { ok: false; error: string };
 
 // ---------------------------------------------------------------------------
 // Client -> server: message builders
 // Each returns a JSON string ready to hand to WebSocket.send.
 // ---------------------------------------------------------------------------
 
-export function build_join_message(room_code?: string): string {
+export function build_join_message(
+  device_name: string,
+  room_code?: string,
+): string {
   const message: JoinMessage =
-    room_code === undefined ? { type: "join" } : { type: "join", room_code };
+    room_code === undefined
+      ? { type: "join", device_name }
+      : { type: "join", device_name, room_code };
   return JSON.stringify(message);
 }
 
@@ -134,8 +148,16 @@ function is_string(value: unknown): value is string {
   return typeof value === "string";
 }
 
-function is_string_array(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
+function is_peer_device_info(value: unknown): value is PeerDeviceInfo {
+  return (
+    is_record(value) &&
+    is_string(value.device_id) &&
+    is_string(value.device_name)
+  );
+}
+
+function is_peer_device_array(value: unknown): value is PeerDeviceInfo[] {
+  return Array.isArray(value) && value.every(is_peer_device_info);
 }
 
 function is_rtc_signal_type(value: unknown): value is RtcSignalType {
@@ -145,13 +167,18 @@ function is_rtc_signal_type(value: unknown): value is RtcSignalType {
 function validate_room_created(
   value: Record<string, unknown>,
 ): RoomCreatedMessage | null {
-  if (!is_string(value.room_code) || !is_string(value.device_id)) {
+  if (
+    !is_string(value.room_code) ||
+    !is_string(value.device_id) ||
+    !is_string(value.device_name)
+  ) {
     return null;
   }
   return {
     type: "room-created",
     room_code: value.room_code,
     device_id: value.device_id,
+    device_name: value.device_name,
   };
 }
 
@@ -161,7 +188,8 @@ function validate_room_joined(
   if (
     !is_string(value.room_code) ||
     !is_string(value.device_id) ||
-    !is_string_array(value.peer_device_ids)
+    !is_string(value.device_name) ||
+    !is_peer_device_array(value.peer_devices)
   ) {
     return null;
   }
@@ -169,26 +197,35 @@ function validate_room_joined(
     type: "room-joined",
     room_code: value.room_code,
     device_id: value.device_id,
-    peer_device_ids: value.peer_device_ids,
+    device_name: value.device_name,
+    peer_devices: value.peer_devices,
   };
 }
 
 function validate_peer_joined(
   value: Record<string, unknown>,
 ): PeerJoinedMessage | null {
-  if (!is_string(value.device_id)) {
+  if (!is_string(value.device_id) || !is_string(value.device_name)) {
     return null;
   }
-  return { type: "peer-joined", device_id: value.device_id };
+  return {
+    type: "peer-joined",
+    device_id: value.device_id,
+    device_name: value.device_name,
+  };
 }
 
 function validate_peer_left(
   value: Record<string, unknown>,
 ): PeerLeftMessage | null {
-  if (!is_string(value.device_id)) {
+  if (!is_string(value.device_id) || !is_string(value.device_name)) {
     return null;
   }
-  return { type: "peer-left", device_id: value.device_id };
+  return {
+    type: "peer-left",
+    device_id: value.device_id,
+    device_name: value.device_name,
+  };
 }
 
 function validate_rtc_relay(
@@ -242,7 +279,9 @@ export function parse_server_message(raw: string): ParseServerMessageResult {
       message = validate_error(parsed);
       break;
     default:
-      message = is_rtc_signal_type(type) ? validate_rtc_relay(type, parsed) : null;
+      message = is_rtc_signal_type(type)
+        ? validate_rtc_relay(type, parsed)
+        : null;
   }
 
   if (message === null) {

@@ -6,13 +6,29 @@
 // I/O, verified by using the app.
 //
 // Expects index.html to already contain the markup with the ids referenced
-// below (see require_element calls). No QR pairing yet - room codes are
-// plain text entry/display for now; can be layered on later without
-// changing this module's callback interface.
+// below (see require_element calls). Room joining supports both manual
+// room-code entry and scanning a QR code (the room creator's device shows
+// a QR encoding a shareable join link; scanning it with a phone's native
+// camera app opens the link, and index.mts auto-fills/auto-joins from the
+// ?room= query param - no in-app camera scanner needed). Every device must
+// choose a name before joining; the server enforces uniqueness per room,
+// this module just does the immediate client-side sanity check.
+
+import QRCode from "qrcode";
+
+// Mirrors hopdrop-signaling's MAX_DEVICE_NAME_LENGTH - the server is the
+// real enforcement point, but validating client-side first avoids a
+// pointless round trip for an obviously-too-long name.
+const MAX_DEVICE_NAME_LENGTH = 40;
+
+export interface PeerOption {
+  device_id: string;
+  device_name: string;
+}
 
 export interface RoomUiCallbacks {
   on_connect: (signaling_url: string) => void;
-  on_join: (room_code: string | undefined) => void;
+  on_join: (device_name: string, room_code: string | undefined) => void;
   on_leave: () => void;
   on_send_file: (target_device_id: string, file: File) => void;
 }
@@ -20,7 +36,7 @@ export interface RoomUiCallbacks {
 export interface RoomUi {
   set_status(text: string): void;
   log(label: string, data?: unknown): void;
-  set_peer_options(device_ids: string[]): void;
+  set_peer_options(peers: PeerOption[]): void;
   set_send_progress(percent: number, label: string): void;
   hide_send_progress(): void;
   add_downloaded_file(
@@ -28,6 +44,12 @@ export interface RoomUi {
     url: string,
     hash_verified: boolean,
   ): void;
+  get_signaling_url(): string;
+  prefill_room_code(room_code: string): void;
+  get_device_name(): string;
+  prefill_device_name(device_name: string): void;
+  show_join_qr_code(join_url: string): Promise<void>;
+  hide_join_qr_code(): void;
 }
 
 function require_element<T extends HTMLElement>(id: string): T {
@@ -41,6 +63,7 @@ function require_element<T extends HTMLElement>(id: string): T {
 export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const ws_url_input = require_element<HTMLInputElement>("ws-url");
   const connect_button = require_element<HTMLButtonElement>("connect");
+  const device_name_input = require_element<HTMLInputElement>("device-name");
   const room_code_input = require_element<HTMLInputElement>("room-code");
   const join_button = require_element<HTMLButtonElement>("join");
   const leave_button = require_element<HTMLButtonElement>("leave");
@@ -55,6 +78,8 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   );
   const log_el = require_element<HTMLElement>("log");
   const downloads_el = require_element<HTMLElement>("downloads");
+  const join_link_el = require_element<HTMLElement>("join-link");
+  const qr_code_el = require_element<HTMLElement>("qr-code");
 
   function ui_log(label: string, data?: unknown): void {
     const line = `[${new Date().toLocaleTimeString()}] ${label}${
@@ -69,8 +94,19 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   });
 
   join_button.addEventListener("click", () => {
+    const device_name = device_name_input.value.trim();
+    if (device_name.length === 0) {
+      ui_log("enter a device name first");
+      return;
+    }
+    if (device_name.length > MAX_DEVICE_NAME_LENGTH) {
+      ui_log(
+        `device name must be ${MAX_DEVICE_NAME_LENGTH} characters or fewer`,
+      );
+      return;
+    }
     const room_code = room_code_input.value.trim() || undefined;
-    callbacks.on_join(room_code);
+    callbacks.on_join(device_name, room_code);
   });
 
   leave_button.addEventListener("click", () => {
@@ -98,19 +134,19 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
 
     log: ui_log,
 
-    set_peer_options(device_ids) {
+    set_peer_options(peers) {
       peer_select.innerHTML = "";
-      if (device_ids.length === 0) {
+      if (peers.length === 0) {
         const opt = document.createElement("option");
         opt.value = "";
         opt.textContent = "(no open channels yet)";
         peer_select.appendChild(opt);
         return;
       }
-      for (const device_id of device_ids) {
+      for (const peer of peers) {
         const opt = document.createElement("option");
-        opt.value = device_id;
-        opt.textContent = device_id;
+        opt.value = peer.device_id;
+        opt.textContent = peer.device_name;
         peer_select.appendChild(opt);
       }
     },
@@ -135,6 +171,33 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
         hash_verified ? "(hash verified)" : "(HASH MISMATCH)"
       }`;
       downloads_el.appendChild(link);
+    },
+
+    get_signaling_url() {
+      return ws_url_input.value;
+    },
+
+    prefill_room_code(room_code) {
+      room_code_input.value = room_code;
+    },
+
+    get_device_name() {
+      return device_name_input.value.trim();
+    },
+
+    prefill_device_name(device_name) {
+      device_name_input.value = device_name;
+    },
+
+    async show_join_qr_code(join_url) {
+      const svg = await QRCode.toString(join_url, { type: "svg" });
+      qr_code_el.innerHTML = svg;
+      join_link_el.textContent = join_url;
+    },
+
+    hide_join_qr_code() {
+      qr_code_el.innerHTML = "";
+      join_link_el.textContent = "";
     },
   };
 }
