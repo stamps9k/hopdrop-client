@@ -12,6 +12,7 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^9.0.0",
+		"@types/bootstrap": "^5.2.11",
 		"@types/node": "^22.10.0",
 		"@types/qrcode": "^1.5.6",
 		"eslint-config-prettier": "^9.0.0",
@@ -29,6 +30,8 @@
 		]
 	},
 	"dependencies": {
+		"bootstrap": "^5.3.8",
+		"bootstrap-icons": "^1.13.1",
 		"qrcode": "^1.5.4"
 	}
 }
