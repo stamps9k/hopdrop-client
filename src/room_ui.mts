@@ -49,7 +49,8 @@ export interface RoomUi {
   get_device_name(): string;
   prefill_device_name(device_name: string): void;
   show_join_qr_code(join_url: string): Promise<void>;
-  hide_join_qr_code(): void;
+  collapse_join_qr_code(): void;
+  clear_join_qr_code(): void;
 }
 
 function require_element<T extends HTMLElement>(id: string): T {
@@ -80,6 +81,7 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const downloads_el = require_element<HTMLElement>("downloads");
   const join_link_el = require_element<HTMLElement>("join-link");
   const qr_code_el = require_element<HTMLElement>("qr-code");
+  const qr_details_el = require_element<HTMLDetailsElement>("qr-details");
 
   function ui_log(label: string, data?: unknown): void {
     const line = `[${new Date().toLocaleTimeString()}] ${label}${
@@ -193,11 +195,17 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       const svg = await QRCode.toString(join_url, { type: "svg" });
       qr_code_el.innerHTML = svg;
       join_link_el.textContent = join_url;
+      qr_details_el.open = true;
     },
 
-    hide_join_qr_code() {
+    collapse_join_qr_code() {
+      qr_details_el.open = false;
+    },
+
+    clear_join_qr_code() {
       qr_code_el.innerHTML = "";
       join_link_el.textContent = "";
+      qr_details_el.open = false;
     },
   };
 }

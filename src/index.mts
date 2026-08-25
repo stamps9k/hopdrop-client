@@ -174,7 +174,7 @@ function connect_to_signaling(url: string): void {
 
     on_peer_joined: (message) => {
       ui.log("peer-joined", message);
-      ui.hide_join_qr_code();
+      ui.collapse_join_qr_code();
       register_new_peer(message);
       get_or_create_peer_connection(message.device_id);
     },
@@ -239,13 +239,17 @@ const ui = create_room_ui({
   },
 
   on_join(device_name, room_code) {
+    if (socket === null || socket.ready_state !== WebSocket.OPEN) {
+      ui.log("still connecting to the server - try again in a moment");
+      return;
+    }
     try {
       localStorage.setItem(DEVICE_NAME_STORAGE_KEY, device_name);
     } catch {
       // Storage can fail (private browsing, quota, disabled) - losing the
       // "remember my name" convenience isn't worth failing the join over.
     }
-    socket?.join(device_name, room_code);
+    socket.join(device_name, room_code);
     ui.log("sent join", { device_name, room_code });
   },
 
@@ -263,7 +267,7 @@ const ui = create_room_ui({
     open_channels.clear();
     clear_all_negotiation_state();
     refresh_peer_select();
-    ui.hide_join_qr_code();
+    ui.clear_join_qr_code();
   },
 
   on_send_file(device_id, file) {
@@ -315,16 +319,22 @@ if (remembered_device_name !== null && remembered_device_name.length > 0) {
 const room_code_from_url = parse_room_code_from_url(window.location.href);
 if (room_code_from_url !== undefined) {
   ui.prefill_room_code(room_code_from_url);
+
+  // Connect right away regardless of whether a device name is remembered -
+  // connecting doesn't require a name, only the join message does. This
+  // means the user never has to press "connect" themselves after opening
+  // a shared link; if a name isn't remembered yet, they just type one and
+  // press "join", which works immediately since the socket is already open.
   if (remembered_device_name !== null && remembered_device_name.length > 0) {
     pending_auto_join = {
       room_code: room_code_from_url,
       device_name: remembered_device_name,
     };
     ui.log(`auto-joining room ${room_code_from_url} (from scanned link)`);
-    connect_to_signaling(ui.get_signaling_url());
   } else {
     ui.log(
       `room ${room_code_from_url} ready to join - enter a device name and press join`,
     );
   }
+  connect_to_signaling(ui.get_signaling_url());
 }
