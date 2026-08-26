@@ -9,7 +9,7 @@ export default defineConfig({
   root: repo_root,
   server: {
     host: true,
-    port: 3001,
+    port: 7421,
   },
   build: {
     target: 'es2022',
