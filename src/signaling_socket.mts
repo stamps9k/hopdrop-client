@@ -15,6 +15,7 @@ import {
   type PeerJoinedMessage,
   type PeerLeftMessage,
   type RoomCreatedMessage,
+  type RoomExpiredMessage,
   type RoomJoinedMessage,
   type RtcRelayMessage,
   type ServerErrorMessage,
@@ -26,6 +27,7 @@ export interface SignalingSocketHandlers {
   on_room_joined?: (message: RoomJoinedMessage) => void;
   on_peer_joined?: (message: PeerJoinedMessage) => void;
   on_peer_left?: (message: PeerLeftMessage) => void;
+  on_room_expired?: (message: RoomExpiredMessage) => void;
   on_offer?: (message: RtcRelayMessage) => void;
   on_answer?: (message: RtcRelayMessage) => void;
   on_ice_candidate?: (message: RtcRelayMessage) => void;
@@ -65,6 +67,9 @@ function dispatch_server_message(
       break;
     case "peer-left":
       handlers.on_peer_left?.(message);
+      break;
+    case "room-expired":
+      handlers.on_room_expired?.(message);
       break;
     case "offer":
     case "answer":

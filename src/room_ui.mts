@@ -151,6 +151,7 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       } else {
         room_status_el.classList.remove("bi-hand-thumbs-up-fill");
         room_status_el.classList.add("bi-x-circle");
+        room_code_input.value = "";
       }
     },
 

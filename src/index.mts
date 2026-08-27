@@ -201,6 +201,13 @@ function connect_to_signaling(url: string): void {
       refresh_peer_select();
     },
 
+    on_room_expired: (message) => {
+      ui.log("room-expired", message);
+      ui.set_room_status(false);
+      ui.clear_join_qr_code();
+      ui.set_status("Connected to signaling");
+    },
+
     // Server-relayed SDP/ICE payloads are opaque `unknown` by design (see
     // hopdrop-signaling's protocol) - the server never inspects them, so
     // the client is trusting its own peer's shape here. Fine at hopdrop's

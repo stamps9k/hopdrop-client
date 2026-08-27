@@ -160,6 +160,17 @@ describe("parse_server_message - valid messages", () => {
     });
   });
 
+  test("parses room-expired", () => {
+    const result = parse_server_message(
+      JSON.stringify({ type: "room-expired", room_code: "AB12" }),
+    );
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.ok ? result.message : null, {
+      type: "room-expired",
+      room_code: "AB12",
+    });
+  });
+
   test("parses offer relay with opaque payload", () => {
     const result = parse_server_message(
       JSON.stringify({
@@ -345,6 +356,20 @@ describe("parse_server_message - malformed input", () => {
   test("rejects peer-left missing device_name", () => {
     const result = parse_server_message(
       JSON.stringify({ type: "peer-left", device_id: "d2" }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  test("rejects room-expired missing room_code", () => {
+    const result = parse_server_message(
+      JSON.stringify({ type: "room-expired" }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  test("rejects room-expired with a non-string room_code", () => {
+    const result = parse_server_message(
+      JSON.stringify({ type: "room-expired", room_code: 1234 }),
     );
     assert.equal(result.ok, false);
   });

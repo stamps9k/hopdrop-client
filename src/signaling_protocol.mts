@@ -63,6 +63,11 @@ export interface PeerLeftMessage {
   device_name: string;
 }
 
+export interface RoomExpiredMessage {
+  type: "room-expired";
+  room_code: string;
+}
+
 export interface RtcRelayMessage {
   type: RtcSignalType;
   from_device_id: string;
@@ -79,6 +84,7 @@ export type ServerMessage =
   | RoomJoinedMessage
   | PeerJoinedMessage
   | PeerLeftMessage
+  | RoomExpiredMessage
   | RtcRelayMessage
   | ServerErrorMessage;
 
@@ -228,6 +234,15 @@ function validate_peer_left(
   };
 }
 
+function validate_room_expired(
+  value: Record<string, unknown>,
+): RoomExpiredMessage | null {
+  if (!is_string(value.room_code)) {
+    return null;
+  }
+  return { type: "room-expired", room_code: value.room_code };
+}
+
 function validate_rtc_relay(
   type: RtcSignalType,
   value: Record<string, unknown>,
@@ -274,6 +289,9 @@ export function parse_server_message(raw: string): ParseServerMessageResult {
       break;
     case "peer-left":
       message = validate_peer_left(parsed);
+      break;
+    case "room-expired":
+      message = validate_room_expired(parsed);
       break;
     case "error":
       message = validate_error(parsed);
