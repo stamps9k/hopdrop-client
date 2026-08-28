@@ -11,6 +11,7 @@ import {
   build_join_message,
   build_leave_message,
   build_offer_message,
+  build_request_turn_credentials_message,
   parse_server_message,
   type PeerJoinedMessage,
   type PeerLeftMessage,
@@ -20,6 +21,7 @@ import {
   type RtcRelayMessage,
   type ServerErrorMessage,
   type ServerMessage,
+  type TurnCredentialsMessage,
 } from "./signaling_protocol.mjs";
 
 export interface SignalingSocketHandlers {
@@ -28,6 +30,7 @@ export interface SignalingSocketHandlers {
   on_peer_joined?: (message: PeerJoinedMessage) => void;
   on_peer_left?: (message: PeerLeftMessage) => void;
   on_room_expired?: (message: RoomExpiredMessage) => void;
+  on_turn_credentials?: (message: TurnCredentialsMessage) => void;
   on_offer?: (message: RtcRelayMessage) => void;
   on_answer?: (message: RtcRelayMessage) => void;
   on_ice_candidate?: (message: RtcRelayMessage) => void;
@@ -42,8 +45,15 @@ export interface SignalingSocketHandlers {
 }
 
 export interface SignalingSocket {
-  join(device_name: string, room_code?: string): void;
+  join(device_name: string, room_code?: string, is_turn?: boolean): void;
   leave(): void;
+  // Fetches (or triggers minting of) this room's TURN credentials. Only
+  // meaningful for an is_turn: true room - per the upfront-fetch design,
+  // call this right after room-created/room-joined confirms is_turn is
+  // true, before constructing any RTCPeerConnection. The result arrives
+  // via on_turn_credentials (success) or on_server_error / on_room_expired
+  // (failure - a failed fetch closes the room server-side).
+  request_turn_credentials(): void;
   send_offer(target_device_id: string, payload: unknown): void;
   send_answer(target_device_id: string, payload: unknown): void;
   send_ice_candidate(target_device_id: string, payload: unknown): void;
@@ -70,6 +80,9 @@ function dispatch_server_message(
       break;
     case "room-expired":
       handlers.on_room_expired?.(message);
+      break;
+    case "turn-credentials":
+      handlers.on_turn_credentials?.(message);
       break;
     case "offer":
     case "answer":
@@ -127,11 +140,14 @@ export function create_signaling_socket(
   }
 
   return {
-    join(device_name, room_code) {
-      send_raw(build_join_message(device_name, room_code));
+    join(device_name, room_code, is_turn) {
+      send_raw(build_join_message(device_name, room_code, is_turn));
     },
     leave() {
       send_raw(build_leave_message());
+    },
+    request_turn_credentials() {
+      send_raw(build_request_turn_credentials_message());
     },
     send_offer(target_device_id, payload) {
       send_raw(build_offer_message(target_device_id, payload));

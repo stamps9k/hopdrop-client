@@ -18,6 +18,26 @@ const DEFAULT_RTC_CONFIG: RTCConfiguration = {
 
 const DATA_CHANNEL_LABEL = "file-transfer";
 
+/**
+ * Builds an RTCConfiguration for an is_turn room: the default STUN server
+ * plus the room's TURN servers, with iceTransportPolicy left at "all" so
+ * ICE still prefers a direct host/srflx path and only falls back to relay
+ * if one can't be established. Merging - not replacing - STUN is required
+ * here: "all" only chooses among candidate types actually present in
+ * iceServers, so a direct path can never be found if STUN isn't included
+ * alongside the TURN entries. ice_servers is expected to already be
+ * validated (see signaling_protocol.mts's is_rtc_ice_server_array) by the
+ * time it reaches this function - no re-validation here.
+ */
+export function create_turn_enabled_rtc_config(
+  ice_servers: RTCIceServer[],
+): RTCConfiguration {
+  return {
+    iceServers: [...(DEFAULT_RTC_CONFIG.iceServers ?? []), ...ice_servers],
+    iceTransportPolicy: "all",
+  };
+}
+
 export interface PeerConnectionHandlers {
   on_data_channel_open?: (channel: RTCDataChannel) => void;
   on_data_channel_close?: () => void;
@@ -61,10 +81,6 @@ export function create_peer_connection(
   let pending_remote_candidates: RTCIceCandidateInit[] = [];
 
   function wire_data_channel(channel: RTCDataChannel): void {
-    // Chunk data should arrive as ArrayBuffer, not Blob (the spec default),
-    // so file_receiver.mts can hand it straight to chunking.mts without an
-    // extra async Blob.arrayBuffer() step per message.
-    channel.binaryType = "arraybuffer";
     data_channel = channel;
     channel.addEventListener("open", () => {
       handlers.on_data_channel_open?.(channel);

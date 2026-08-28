@@ -11,6 +11,12 @@ export interface JoinMessage {
   type: "join";
   device_name: string;
   room_code?: string;
+  // Whether this device wants TURN enforced for this room. Only meaningful
+  // when creating a room (room_code omitted) - when joining an existing
+  // room, the server checks this against the room's stored value and
+  // rejects a mismatch. Optional, defaults to false server-side, for
+  // backwards compatibility with clients that predate TURN support.
+  is_turn?: boolean;
 }
 
 export interface LeaveMessage {
@@ -25,7 +31,14 @@ export interface RtcSignalMessage {
   payload: unknown;
 }
 
-export type ClientMessage = JoinMessage | LeaveMessage | RtcSignalMessage;
+// No fields - the server resolves which room this applies to from the
+// sender's own connection state, same as `leave`.
+export interface RequestTurnCredentialsMessage {
+  type: "request-turn-credentials";
+}
+
+export type ClientMessage =
+  JoinMessage | LeaveMessage | RtcSignalMessage | RequestTurnCredentialsMessage;
 
 // ---------------------------------------------------------------------------
 // Server -> client message shapes
@@ -36,6 +49,9 @@ export interface RoomCreatedMessage {
   room_code: string;
   device_id: string;
   device_name: string;
+  // Always echoes the room's resolved value, even when the creating
+  // device didn't specify one (resolves to false in that case).
+  is_turn: boolean;
 }
 
 export interface PeerDeviceInfo {
@@ -49,6 +65,7 @@ export interface RoomJoinedMessage {
   device_id: string;
   device_name: string;
   peer_devices: PeerDeviceInfo[];
+  is_turn: boolean;
 }
 
 export interface PeerJoinedMessage {
@@ -68,6 +85,17 @@ export interface RoomExpiredMessage {
   room_code: string;
 }
 
+// Fully validated against RTCIceServer's shape (see is_rtc_ice_server_array
+// below) - unlike RtcRelayMessage's payload further down, this value is
+// consumed structurally by peer_connection.mts (as
+// RTCConfiguration.iceServers), so an unvalidated value would surface as a
+// confusing WebRTC-level failure far from the actual cause instead of a
+// clear parse error here.
+export interface TurnCredentialsMessage {
+  type: "turn-credentials";
+  ice_servers: RTCIceServer[];
+}
+
 export interface RtcRelayMessage {
   type: RtcSignalType;
   from_device_id: string;
@@ -85,6 +113,7 @@ export type ServerMessage =
   | PeerJoinedMessage
   | PeerLeftMessage
   | RoomExpiredMessage
+  | TurnCredentialsMessage
   | RtcRelayMessage
   | ServerErrorMessage;
 
@@ -99,11 +128,15 @@ export type ParseServerMessageResult =
 export function build_join_message(
   device_name: string,
   room_code?: string,
+  is_turn?: boolean,
 ): string {
-  const message: JoinMessage =
-    room_code === undefined
-      ? { type: "join", device_name }
-      : { type: "join", device_name, room_code };
+  const message: JoinMessage = { type: "join", device_name };
+  if (room_code !== undefined) {
+    message.room_code = room_code;
+  }
+  if (is_turn !== undefined) {
+    message.is_turn = is_turn;
+  }
   return JSON.stringify(message);
 }
 
@@ -142,6 +175,13 @@ export function build_ice_candidate_message(
   return build_rtc_signal_message("ice-candidate", target_device_id, payload);
 }
 
+export function build_request_turn_credentials_message(): string {
+  const message: RequestTurnCredentialsMessage = {
+    type: "request-turn-credentials",
+  };
+  return JSON.stringify(message);
+}
+
 // ---------------------------------------------------------------------------
 // Server -> client: parsing + validation
 // ---------------------------------------------------------------------------
@@ -152,6 +192,10 @@ function is_record(value: unknown): value is Record<string, unknown> {
 
 function is_string(value: unknown): value is string {
   return typeof value === "string";
+}
+
+function is_boolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
 }
 
 function is_peer_device_info(value: unknown): value is PeerDeviceInfo {
@@ -170,13 +214,50 @@ function is_rtc_signal_type(value: unknown): value is RtcSignalType {
   return value === "offer" || value === "answer" || value === "ice-candidate";
 }
 
+// RTCIceServer.urls is a single URL string or a non-empty array of them.
+function is_ice_server_urls(value: unknown): value is string | string[] {
+  if (is_string(value)) {
+    return true;
+  }
+  return Array.isArray(value) && value.length > 0 && value.every(is_string);
+}
+
+function is_rtc_ice_server(value: unknown): value is RTCIceServer {
+  if (!is_record(value) || !is_ice_server_urls(value.urls)) {
+    return false;
+  }
+  if (value.username !== undefined && !is_string(value.username)) {
+    return false;
+  }
+  if (value.credential !== undefined && !is_string(value.credential)) {
+    return false;
+  }
+  // "password" is the only credentialType the spec defines (the historical
+  // "token" option was dropped) - anything else present is treated as
+  // invalid rather than silently accepted.
+  if (
+    value.credentialType !== undefined &&
+    value.credentialType !== "password"
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function is_rtc_ice_server_array(value: unknown): value is RTCIceServer[] {
+  return (
+    Array.isArray(value) && value.length > 0 && value.every(is_rtc_ice_server)
+  );
+}
+
 function validate_room_created(
   value: Record<string, unknown>,
 ): RoomCreatedMessage | null {
   if (
     !is_string(value.room_code) ||
     !is_string(value.device_id) ||
-    !is_string(value.device_name)
+    !is_string(value.device_name) ||
+    !is_boolean(value.is_turn)
   ) {
     return null;
   }
@@ -185,6 +266,7 @@ function validate_room_created(
     room_code: value.room_code,
     device_id: value.device_id,
     device_name: value.device_name,
+    is_turn: value.is_turn,
   };
 }
 
@@ -195,7 +277,8 @@ function validate_room_joined(
     !is_string(value.room_code) ||
     !is_string(value.device_id) ||
     !is_string(value.device_name) ||
-    !is_peer_device_array(value.peer_devices)
+    !is_peer_device_array(value.peer_devices) ||
+    !is_boolean(value.is_turn)
   ) {
     return null;
   }
@@ -205,6 +288,7 @@ function validate_room_joined(
     device_id: value.device_id,
     device_name: value.device_name,
     peer_devices: value.peer_devices,
+    is_turn: value.is_turn,
   };
 }
 
@@ -241,6 +325,15 @@ function validate_room_expired(
     return null;
   }
   return { type: "room-expired", room_code: value.room_code };
+}
+
+function validate_turn_credentials(
+  value: Record<string, unknown>,
+): TurnCredentialsMessage | null {
+  if (!is_rtc_ice_server_array(value.ice_servers)) {
+    return null;
+  }
+  return { type: "turn-credentials", ice_servers: value.ice_servers };
 }
 
 function validate_rtc_relay(
@@ -292,6 +385,9 @@ export function parse_server_message(raw: string): ParseServerMessageResult {
       break;
     case "room-expired":
       message = validate_room_expired(parsed);
+      break;
+    case "turn-credentials":
+      message = validate_turn_credentials(parsed);
       break;
     case "error":
       message = validate_error(parsed);
