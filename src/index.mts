@@ -26,6 +26,13 @@ import {
   create_peer_connection,
   type PeerConnection,
 } from "./peer_connection.mjs";
+import {
+  reset_turn_state,
+  begin_turn_request,
+  resolve_turn_credentials,
+  is_turn_request_pending,
+  get_rtc_config_when_ready,
+} from "./turn_state.mjs";
 import { send_file } from "./file_sender.mjs";
 import { attach_file_receiver, type FileReceiver } from "./file_receiver.mjs";
 import { build_join_url, parse_room_code_from_url } from "./qr_join.mjs";
@@ -38,6 +45,15 @@ const DEVICE_NAME_STORAGE_KEY = "hopdrop_device_name";
 
 let socket: SignalingSocket | null = null;
 const peer_connections = new Map<string, PeerConnection>();
+// Tracks a peer connection's creation while it's still in flight (i.e.
+// waiting on get_rtc_config_when_ready()) - not just the finished result.
+// Needed because get_or_create_peer_connection is async: without this, two
+// messages for the same device_id arriving close together (e.g. peer-joined
+// followed shortly by that peer's own offer) could each see no existing
+// connection and both start creating one, the second silently clobbering
+// the first's data channel. A concurrent call for the same device_id now
+// gets the same in-flight promise instead of racing a duplicate creation.
+const pending_peer_connections = new Map<string, Promise<PeerConnection>>();
 const open_channels = new Map<string, RTCDataChannel>();
 const file_receivers = new Map<string, FileReceiver>();
 
@@ -62,72 +78,146 @@ function refresh_peer_select(): void {
   ui.set_peer_options(peers);
 }
 
-function get_or_create_peer_connection(device_id: string): PeerConnection {
+/**
+ * Returns the existing connection for a peer, or creates one - waiting on
+ * get_rtc_config_when_ready() first so a TURN-enabled room's connections
+ * are built with the right RTCConfiguration rather than racing ahead of
+ * credentials that haven't arrived yet. For a non-TURN room this wait
+ * resolves immediately, so existing behavior is unaffected there.
+ *
+ * Can reject if the room closes (room-expired) or a defensive TURN error
+ * arrives while this is in flight - see turn_state.mts. Also rejects if
+ * the peer itself leaves before its own connection was ready (checked via
+ * rtc_negotiation.mts's get_peer_state - reusing its existing tracking
+ * rather than adding new state just for this). Callers should use
+ * try_get_or_create_peer_connection below rather than call this directly,
+ * unless they specifically want to handle the rejection themselves.
+ */
+async function get_or_create_peer_connection(
+  device_id: string,
+): Promise<PeerConnection> {
   const existing = peer_connections.get(device_id);
   if (existing !== undefined) {
     return existing;
   }
 
-  const pc = create_peer_connection(device_id, {
-    on_local_ice_candidate: (candidate) => {
-      socket?.send_ice_candidate(device_id, candidate.toJSON());
-    },
+  const in_flight = pending_peer_connections.get(device_id);
+  if (in_flight !== undefined) {
+    return in_flight;
+  }
 
-    on_connection_state_change: (state) => {
-      ui.log(`connection state [${device_id}]`, state);
-    },
+  const creation_promise = (async (): Promise<PeerConnection> => {
+    const rtc_config = await get_rtc_config_when_ready();
 
-    on_data_channel_open: (channel) => {
-      open_channels.set(device_id, channel);
-      refresh_peer_select();
-      ui.log(`data channel OPEN with ${device_id}`);
+    const pc = create_peer_connection(
+      device_id,
+      {
+        on_local_ice_candidate: (candidate) => {
+          socket?.send_ice_candidate(device_id, candidate.toJSON());
+        },
 
-      const receiver = attach_file_receiver(channel, {
-        on_start: (info) => {
-          ui.log(`receiving "${info.file_name}" from ${device_id}`, {
-            file_size: info.file_size,
-            total_chunks: info.total_chunks,
+        on_connection_state_change: (state) => {
+          ui.log(`connection state [${device_id}]`, state);
+        },
+
+        on_data_channel_open: (channel) => {
+          open_channels.set(device_id, channel);
+          refresh_peer_select();
+          ui.log(`data channel OPEN with ${device_id}`);
+
+          const receiver = attach_file_receiver(channel, {
+            on_start: (info) => {
+              ui.log(`receiving "${info.file_name}" from ${device_id}`, {
+                file_size: info.file_size,
+                total_chunks: info.total_chunks,
+              });
+            },
+            on_progress: (progress) => {
+              ui.log(
+                `recv progress [${device_id}] ${progress.chunks_received}/${progress.total_chunks} chunks`,
+              );
+            },
+            on_complete: (result) => {
+              ui.log(`file received from ${device_id}`, {
+                file_name: result.file_name,
+                bytes_received: result.bytes_received,
+                hash_verified: result.hash_verified,
+              });
+              const url = URL.createObjectURL(result.blob);
+              ui.add_downloaded_file(
+                result.file_name,
+                url,
+                result.hash_verified,
+              );
+            },
+            on_error: (error) => {
+              ui.log(`file receiver error [${device_id}]`, error.message);
+            },
           });
+          file_receivers.set(device_id, receiver);
         },
-        on_progress: (progress) => {
-          ui.log(
-            `recv progress [${device_id}] ${progress.chunks_received}/${progress.total_chunks} chunks`,
-          );
-        },
-        on_complete: (result) => {
-          ui.log(`file received from ${device_id}`, {
-            file_name: result.file_name,
-            bytes_received: result.bytes_received,
-            hash_verified: result.hash_verified,
-          });
-          const url = URL.createObjectURL(result.blob);
-          ui.add_downloaded_file(result.file_name, url, result.hash_verified);
-        },
-        on_error: (error) => {
-          ui.log(`file receiver error [${device_id}]`, error.message);
-        },
-      });
-      file_receivers.set(device_id, receiver);
-    },
 
-    on_data_channel_close: () => {
-      open_channels.delete(device_id);
-      file_receivers.get(device_id)?.detach();
-      file_receivers.delete(device_id);
-      refresh_peer_select();
-      ui.log(`data channel CLOSED with ${device_id}`);
-    },
-  });
+        on_data_channel_close: () => {
+          open_channels.delete(device_id);
+          file_receivers.get(device_id)?.detach();
+          file_receivers.delete(device_id);
+          refresh_peer_select();
+          ui.log(`data channel CLOSED with ${device_id}`);
+        },
+      },
+      rtc_config,
+    );
 
-  peer_connections.set(device_id, pc);
-  return pc;
+    // The peer may have left (peer-left already ran remove_peer) while we
+    // were waiting on rtc_config above - don't register a connection for
+    // someone who's already gone.
+    if (get_peer_state(device_id) === undefined) {
+      pc.close();
+      throw new Error(`peer ${device_id} left before its connection was ready`);
+    }
+
+    peer_connections.set(device_id, pc);
+    return pc;
+  })();
+
+  pending_peer_connections.set(device_id, creation_promise);
+  try {
+    return await creation_promise;
+  } finally {
+    pending_peer_connections.delete(device_id);
+  }
+}
+
+/**
+ * Wraps get_or_create_peer_connection, turning its two failure cases (room
+ * closed, or the peer left first - see above) into a logged message and
+ * undefined, instead of an unhandled rejection. dispatch_server_message
+ * doesn't await handler results, so an uncaught rejection inside an async
+ * handler would otherwise surface as a genuine unhandled promise rejection
+ * rather than a clean log line.
+ */
+async function try_get_or_create_peer_connection(
+  device_id: string,
+): Promise<PeerConnection | undefined> {
+  try {
+    return await get_or_create_peer_connection(device_id);
+  } catch (error) {
+    ui.log(
+      `could not create a peer connection for ${device_id} - the room closed or the peer left first`,
+      error instanceof Error ? error.message : String(error),
+    );
+    return undefined;
+  }
 }
 
 async function initiate_offer_if_caller(device_id: string): Promise<void> {
   if (!should_send_offer(device_id)) {
     return;
   }
-  const pc = get_or_create_peer_connection(device_id);
+  const pc = await try_get_or_create_peer_connection(device_id);
+  if (pc === undefined) {
+    return;
+  }
   const offer = await pc.create_and_send_offer();
   mark_offer_sent(device_id);
   socket?.send_offer(device_id, offer);
@@ -158,6 +248,11 @@ function connect_to_signaling(url: string): void {
     on_parse_error: (raw, error) => ui.log("PARSE ERROR", { raw, error }),
 
     on_room_created: (message) => {
+      reset_turn_state();
+      if (message.is_turn) {
+        begin_turn_request();
+        socket?.request_turn_credentials();
+      }
       ui.set_status(
         `Room ${message.room_code} - I am "${message.device_name}"`,
       );
@@ -169,6 +264,11 @@ function connect_to_signaling(url: string): void {
     },
 
     on_room_joined: async (message) => {
+      reset_turn_state();
+      if (message.is_turn) {
+        begin_turn_request();
+        socket?.request_turn_credentials();
+      }
       ui.set_status(
         `Room ${message.room_code} - I am "${message.device_name}"`,
       );
@@ -183,11 +283,13 @@ function connect_to_signaling(url: string): void {
       ui.collapse_join_qr_code();
     },
 
-    on_peer_joined: (message) => {
+    on_peer_joined: async (message) => {
       ui.log("peer-joined", message);
       ui.collapse_join_qr_code();
       register_new_peer(message);
-      get_or_create_peer_connection(message.device_id);
+      // Created now (rather than waiting for their offer) so it's ready to
+      // receive it as soon as it arrives.
+      await try_get_or_create_peer_connection(message.device_id);
     },
 
     on_peer_left: (message) => {
@@ -203,9 +305,20 @@ function connect_to_signaling(url: string): void {
 
     on_room_expired: (message) => {
       ui.log("room-expired", message);
+      // Reusing room-expired for both TTL timeout and a failed TURN
+      // credential fetch is a known limitation (hopdrop-signaling side) -
+      // the client can't yet tell these apart. Rejects any peer connection
+      // currently waiting on TURN credentials so it can bail out cleanly
+      // instead of hanging.
+      reset_turn_state();
       ui.set_room_status(false);
       ui.clear_join_qr_code();
       ui.set_status("Connected to signaling");
+    },
+
+    on_turn_credentials: (message) => {
+      ui.log("turn-credentials received");
+      resolve_turn_credentials(message.ice_servers);
     },
 
     // Server-relayed SDP/ICE payloads are opaque `unknown` by design (see
@@ -215,7 +328,12 @@ function connect_to_signaling(url: string): void {
     // validation if this ever faced untrusted peers.
     on_offer: async (message) => {
       ui.log(`offer from ${message.from_device_id}`);
-      const pc = get_or_create_peer_connection(message.from_device_id);
+      const pc = await try_get_or_create_peer_connection(
+        message.from_device_id,
+      );
+      if (pc === undefined) {
+        return;
+      }
       const answer = await pc.handle_remote_offer(
         message.payload as RTCSessionDescriptionInit,
       );
@@ -246,7 +364,18 @@ function connect_to_signaling(url: string): void {
       await pc.add_remote_ice_candidate(message.payload as RTCIceCandidateInit);
     },
 
-    on_server_error: (message) => ui.log("server error", message),
+    on_server_error: (message) => {
+      ui.log("server error", message);
+      // The normal way a failed TURN fetch surfaces is room-expired, not a
+      // bare error (see hopdrop-signaling's close_room_due_to_turn_failure)
+      // - this only catches the narrower, defensive request-turn-credentials
+      // error paths (e.g. the room somehow no longer exists by the time the
+      // request lands). Without this, one of those rare cases would leave
+      // get_rtc_config_when_ready() waiting forever.
+      if (is_turn_request_pending()) {
+        reset_turn_state();
+      }
+    },
   });
   ui.log("connecting to", url);
 }
@@ -275,6 +404,7 @@ const ui = create_room_ui({
     socket?.leave();
     ui.log("sent leave");
     ui.set_room_status(false);
+    reset_turn_state();
     for (const pc of peer_connections.values()) {
       pc.close();
     }
@@ -282,6 +412,7 @@ const ui = create_room_ui({
       receiver.detach();
     }
     peer_connections.clear();
+    pending_peer_connections.clear();
     file_receivers.clear();
     open_channels.clear();
     clear_all_negotiation_state();
