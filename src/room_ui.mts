@@ -22,6 +22,15 @@
 // here currently tells a joiner what a room's is_turn actually is before
 // they try - that's a known gap, not something this module tries to
 // solve.
+//
+// If the checkbox is checked, a one-time (per browser, via localStorage)
+// accept/reject warning is shown before the join is ever sent, disclosing
+// that traffic may be relayed through a third-party TURN server. Rejecting
+// cancels the join entirely - on_join is never called, and nothing about
+// the form's state changes. This whole flow is self-contained here:
+// index.mts's on_join callback is unaware it happened, since from its
+// perspective the callback is just invoked later than usual (or not at
+// all) - same signature, no new wiring needed on that side.
 
 import QRCode from "qrcode";
 
@@ -29,6 +38,11 @@ import QRCode from "qrcode";
 // real enforcement point, but validating client-side first avoids a
 // pointless round trip for an obviously-too-long name.
 const MAX_DEVICE_NAME_LENGTH = 40;
+
+// Presence-based flag, mirroring index.mts's DEVICE_NAME_STORAGE_KEY
+// pattern - once set, the TURN warning modal is skipped on every future
+// join click in this browser, regardless of which room or device name.
+const TURN_WARNING_STORAGE_KEY = "hopdrop_turn_warning_acknowledged";
 
 export interface PeerOption {
   device_id: string;
@@ -76,6 +90,27 @@ function require_element<T extends HTMLElement>(id: string): T {
   return el as T;
 }
 
+function has_acknowledged_turn_warning(): boolean {
+  try {
+    return localStorage.getItem(TURN_WARNING_STORAGE_KEY) !== null;
+  } catch {
+    // Storage access can throw (private browsing, disabled entirely) - if
+    // we can't remember a prior acknowledgment, show the warning every
+    // time rather than silently skipping a disclosure the user never
+    // actually saw.
+    return false;
+  }
+}
+
+function mark_turn_warning_acknowledged(): void {
+  try {
+    localStorage.setItem(TURN_WARNING_STORAGE_KEY, "1");
+  } catch {
+    // Losing the "don't ask again" convenience isn't worth failing the
+    // join over - the warning will just show again next time.
+  }
+}
+
 export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const ws_url_input = require_element<HTMLInputElement>("ws-url");
   const connect_button = require_element<HTMLButtonElement>("connect");
@@ -101,6 +136,20 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const join_link_el = require_element<HTMLElement>("join-link");
   const qr_code_el = require_element<HTMLElement>("qr-code");
   const qr_details_el = require_element<HTMLDetailsElement>("qr-details");
+  const turn_warning_modal_el =
+    require_element<HTMLElement>("turn-warning-modal");
+  const turn_warning_accept_button = require_element<HTMLButtonElement>(
+    "turn-warning-accept",
+  );
+  const turn_warning_reject_button = require_element<HTMLButtonElement>(
+    "turn-warning-reject",
+  );
+  // The app's main container - gets .app-dimmed toggled while the TURN
+  // warning modal is open. Kept as a plain element reference here rather
+  // than exposed via the RoomUi interface, since dimming is purely a
+  // side-effect of the modal itself, not something index.mts ever needs
+  // to trigger independently.
+  const app_root_el = require_element<HTMLElement>("app-root");
 
   function ui_log(label: string, data?: unknown): void {
     const line = `[${new Date().toLocaleTimeString()}] ${label}${
@@ -110,25 +159,64 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
     log_el.scrollTop = log_el.scrollHeight;
   }
 
+  // Resolves true if the user clicks "I Understand", false if they click
+  // "Reject". No other way to dismiss this exists - no backdrop element,
+  // no Escape handler - so an explicit choice is the only path out.
+  function show_turn_warning_modal(): Promise<boolean> {
+    return new Promise((resolve) => {
+      function on_accept(): void {
+        cleanup();
+        resolve(true);
+      }
+      function on_reject(): void {
+        cleanup();
+        resolve(false);
+      }
+      function cleanup(): void {
+        turn_warning_modal_el.style.display = "none";
+        app_root_el.classList.remove("app-dimmed");
+        turn_warning_accept_button.removeEventListener("click", on_accept);
+        turn_warning_reject_button.removeEventListener("click", on_reject);
+      }
+      turn_warning_accept_button.addEventListener("click", on_accept);
+      turn_warning_reject_button.addEventListener("click", on_reject);
+      turn_warning_modal_el.style.display = "flex";
+      app_root_el.classList.add("app-dimmed");
+    });
+  }
+
   connect_button.addEventListener("click", () => {
     callbacks.on_connect(ws_url_input.value);
   });
 
   join_button.addEventListener("click", () => {
-    const device_name = device_name_input.value.trim();
-    if (device_name.length === 0) {
-      ui_log("enter a device name first");
-      return;
-    }
-    if (device_name.length > MAX_DEVICE_NAME_LENGTH) {
-      ui_log(
-        `device name must be ${MAX_DEVICE_NAME_LENGTH} characters or fewer`,
-      );
-      return;
-    }
-    const room_code = room_code_input.value.trim() || undefined;
-    const is_turn = use_turn_checkbox.checked;
-    callbacks.on_join(device_name, room_code, is_turn);
+    void (async () => {
+      const device_name = device_name_input.value.trim();
+      if (device_name.length === 0) {
+        ui_log("enter a device name first");
+        return;
+      }
+      if (device_name.length > MAX_DEVICE_NAME_LENGTH) {
+        ui_log(
+          `device name must be ${MAX_DEVICE_NAME_LENGTH} characters or fewer`,
+        );
+        return;
+      }
+      const room_code = room_code_input.value.trim() || undefined;
+      const is_turn = use_turn_checkbox.checked;
+
+      if (is_turn && !has_acknowledged_turn_warning()) {
+        const accepted = await show_turn_warning_modal();
+        if (!accepted) {
+          ui_log("TURN relay declined - join not sent");
+          return;
+        }
+        mark_turn_warning_acknowledged();
+        ui_log("TURN relay use acknowledged");
+      }
+
+      callbacks.on_join(device_name, room_code, is_turn);
+    })();
   });
 
   leave_button.addEventListener("click", () => {

@@ -49,12 +49,12 @@
 	color: #0f0;
 }
 
-/* Special size for the qr-vode svg image */
+/* Custom Special size for the qr-vode svg image */
 #qr-code svg { 
 	width: 200px; height: 200px; 
 }
 
-/* Special custom styling for the webapp logs */
+/* Custom special styling for the webapp logs */
 #log { 
 	white-space: pre-wrap; 
 	background: #111; 
@@ -67,6 +67,23 @@
 /* Custom underline for heading 6 */
 h6 {
 	text-decoration: underline;
+}
+
+/* Custom modal dialog styling */
+#turn-warning-modal {
+	display: none; 
+	position: fixed; 
+	inset: 100px; 
+	align-items: center; 
+	justify-content: center; 
+	z-index: 1050;
+}
+
+/* Custom fading applied to webapp when modal dialog box is shown */
+.app-dimmed {
+	opacity: 0.5;
+	transition: opacity 0.2s ease;
+	pointer-events: none;
 }
 
 /*

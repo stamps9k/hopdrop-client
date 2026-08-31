@@ -10,7 +10,7 @@
     <title>Hopdrop</title>
   </head>
   <body class="d-flex h-100 text-center text-bg-dark">
-		<div class="cover-container d-flex w-100 h-100 p-3 mx-auto flex-column">
+		<div class="cover-container d-flex w-100 h-100 p-3 mx-auto flex-column" id="app-root">
       <header class="mb-auto">
         <div>
           <a class="text-white" href="index.html"
@@ -146,6 +146,34 @@
 				<a href="https://twitter.com/mdo" class="text-white">@mdo</a>.
 			</p>
 		</footer>
+		</div>
+		<div id="turn-warning-modal">
+			<div class="modal-dialog">
+				<div class="modal-content bg-light text-dark p-2 rounded-2">
+					<div class="modal-header">
+						<h5 class="modal-title">TURN Relay Enabled</h5>
+					</div>
+					<div class="modal-body text-start">
+						<p>
+							This room uses a TURN relay server (Metered) to help connect
+							devices that can't reach each other directly.
+						</p>
+						<p>
+							When a direct connection isn't possible, your file data is
+							routed through Metered's servers instead of going straight
+							between your devices. The connection stays end-to-end
+							encrypted — Metered relays the encrypted traffic but can't
+							read its contents — though it can see connection metadata,
+							such as your devices' IP addresses and how much data was
+							transferred.
+						</p>
+					</div>
+					<div class="modal-footer">
+						<button type="button" class="btn btn-secondary mx-1" id="turn-warning-reject">Reject</button>
+						<button type="button" class="btn btn-primary mx-1" id="turn-warning-accept">I Understand</button>
+					</div>
+				</div>
+			</div>
 		</div>
   </body>
 </html>
