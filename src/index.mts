@@ -385,7 +385,7 @@ const ui = create_room_ui({
     connect_to_signaling(url);
   },
 
-  on_join(device_name, room_code) {
+  on_join(device_name, room_code, is_turn) {
     if (socket === null || socket.ready_state !== WebSocket.OPEN) {
       ui.log("still connecting to the server - try again in a moment");
       return;
@@ -396,8 +396,8 @@ const ui = create_room_ui({
       // Storage can fail (private browsing, quota, disabled) - losing the
       // "remember my name" convenience isn't worth failing the join over.
     }
-    socket.join(device_name, room_code);
-    ui.log("sent join", { device_name, room_code });
+    socket.join(device_name, room_code, is_turn);
+    ui.log("sent join", { device_name, room_code, is_turn });
   },
 
   on_leave() {

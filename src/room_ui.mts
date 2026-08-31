@@ -13,6 +13,15 @@
 // ?room= query param - no in-app camera scanner needed). Every device must
 // choose a name before joining; the server enforces uniqueness per room,
 // this module just does the immediate client-side sanity check.
+//
+// The "Use TURN relay" checkbox is read on every join click, whether
+// creating or joining a room - on_join is the one handler for both. It
+// only really matters at creation time (it sets the room's is_turn for
+// its whole lifetime); when joining an existing room, the value sent must
+// match what the room was created with or the server rejects it. Nothing
+// here currently tells a joiner what a room's is_turn actually is before
+// they try - that's a known gap, not something this module tries to
+// solve.
 
 import QRCode from "qrcode";
 
@@ -28,7 +37,11 @@ export interface PeerOption {
 
 export interface RoomUiCallbacks {
   on_connect: (signaling_url: string) => void;
-  on_join: (device_name: string, room_code: string | undefined) => void;
+  on_join: (
+    device_name: string,
+    room_code: string | undefined,
+    is_turn: boolean,
+  ) => void;
   on_leave: () => void;
   on_send_file: (target_device_id: string, file: File) => void;
 }
@@ -69,6 +82,7 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const connect_status_el = require_element<HTMLElement>("connect-status");
   const device_name_input = require_element<HTMLInputElement>("device-name");
   const room_code_input = require_element<HTMLInputElement>("room-code");
+  const use_turn_checkbox = require_element<HTMLInputElement>("use-turn");
   const join_button = require_element<HTMLButtonElement>("join");
   const leave_button = require_element<HTMLButtonElement>("leave");
   const room_status_el = require_element<HTMLElement>("room-status");
@@ -113,7 +127,8 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       return;
     }
     const room_code = room_code_input.value.trim() || undefined;
-    callbacks.on_join(device_name, room_code);
+    const is_turn = use_turn_checkbox.checked;
+    callbacks.on_join(device_name, room_code, is_turn);
   });
 
   leave_button.addEventListener("click", () => {
