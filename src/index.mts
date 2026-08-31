@@ -35,7 +35,11 @@ import {
 } from "./turn_state.mjs";
 import { send_file } from "./file_sender.mjs";
 import { attach_file_receiver, type FileReceiver } from "./file_receiver.mjs";
-import { build_join_url, parse_room_code_from_url } from "./qr_join.mjs";
+import {
+  build_join_url,
+  parse_room_code_from_url,
+  parse_is_turn_from_url,
+} from "./qr_join.mjs";
 import { create_room_ui, type PeerOption } from "./room_ui.mjs";
 
 // Remembers the chosen device name across visits in this browser, so
@@ -57,14 +61,18 @@ const pending_peer_connections = new Map<string, Promise<PeerConnection>>();
 const open_channels = new Map<string, RTCDataChannel>();
 const file_receivers = new Map<string, FileReceiver>();
 
-// Set only when the page was opened via a scanned QR / shared join link
-// AND a device name is already remembered from a previous visit - in that
-// case both connect and join fire automatically with no typing needed. If
-// there's no remembered name, the room code is still pre-filled but the
-// user has to type a name once and press join themselves, since a name
-// can't be silently invented on their behalf (that would undercut the
-// whole point of server-enforced, user-chosen names).
-let pending_auto_join: { room_code: string; device_name: string } | undefined;
+// Set only when a device name is already remembered from a previous visit
+// AND the page was opened via a scanned QR / shared join link - in that
+// case, once the socket connects, trigger_join() fires automatically
+// using whatever room-code/is_turn values were already prefilled from the
+// URL, with no typing needed. If there's no remembered name, the room
+// code (and is_turn) are still pre-filled but the user has to type a name
+// once and press join themselves, since a name can't be silently invented
+// on their behalf (that would undercut the whole point of
+// server-enforced, user-chosen names). No longer carries room_code/
+// device_name itself - trigger_join() reads current form state directly,
+// so this is just a "should we auto-trigger" flag.
+let pending_auto_join = false;
 
 function refresh_peer_select(): void {
   const peers: PeerOption[] = [...open_channels.keys()].map((device_id) => ({
@@ -230,14 +238,15 @@ function connect_to_signaling(url: string): void {
       ui.set_status("Connected to signaling");
       ui.set_connected_status();
       ui.log("signaling OPEN");
-      if (pending_auto_join !== undefined) {
-        const { room_code, device_name } = pending_auto_join;
-        pending_auto_join = undefined;
-        socket?.join(device_name, room_code);
-        ui.log("sent join (auto, from scanned link)", {
-          room_code,
-          device_name,
-        });
+      if (pending_auto_join) {
+        pending_auto_join = false;
+        ui.log("auto-joining (from scanned link)");
+        // Goes through the exact same validation/consent-gated flow a
+        // manual click would (including the TURN warning modal, if
+        // is_turn was prefilled true from the URL) - reads room code,
+        // device name, and is_turn straight from the DOM, all of which
+        // were already prefilled below before this socket connected.
+        ui.trigger_join();
       }
     },
     on_close: (event) => {
@@ -259,7 +268,11 @@ function connect_to_signaling(url: string): void {
       ui.log("room-created", message);
       ui.set_room_status(true);
       ui.prefill_room_code(message.room_code);
-      const join_url = build_join_url(window.location.href, message.room_code);
+      const join_url = build_join_url(
+        window.location.href,
+        message.room_code,
+        message.is_turn,
+      );
       void ui.show_join_qr_code(join_url);
     },
 
@@ -278,7 +291,11 @@ function connect_to_signaling(url: string): void {
       for (const peer of peers) {
         await initiate_offer_if_caller(peer.device_id);
       }
-      const join_url = build_join_url(window.location.href, message.room_code);
+      const join_url = build_join_url(
+        window.location.href,
+        message.room_code,
+        message.is_turn,
+      );
       await ui.show_join_qr_code(join_url);
       ui.collapse_join_qr_code();
     },
@@ -469,6 +486,8 @@ if (remembered_device_name !== null && remembered_device_name.length > 0) {
 const room_code_from_url = parse_room_code_from_url(window.location.href);
 if (room_code_from_url !== undefined) {
   ui.prefill_room_code(room_code_from_url);
+  const is_turn_from_url = parse_is_turn_from_url(window.location.href);
+  ui.prefill_is_turn(is_turn_from_url);
 
   // Connect right away regardless of whether a device name is remembered -
   // connecting doesn't require a name, only the join message does. This
@@ -476,11 +495,10 @@ if (room_code_from_url !== undefined) {
   // a shared link; if a name isn't remembered yet, they just type one and
   // press "join", which works immediately since the socket is already open.
   if (remembered_device_name !== null && remembered_device_name.length > 0) {
-    pending_auto_join = {
-      room_code: room_code_from_url,
-      device_name: remembered_device_name,
-    };
-    ui.log(`auto-joining room ${room_code_from_url} (from scanned link)`);
+    pending_auto_join = true;
+    ui.log(`auto-joining room ${room_code_from_url} (from scanned link)`, {
+      is_turn: is_turn_from_url,
+    });
   } else {
     ui.log(
       `room ${room_code_from_url} ready to join - enter a device name and press join`,

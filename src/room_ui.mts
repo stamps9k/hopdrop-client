@@ -18,10 +18,11 @@
 // creating or joining a room - on_join is the one handler for both. It
 // only really matters at creation time (it sets the room's is_turn for
 // its whole lifetime); when joining an existing room, the value sent must
-// match what the room was created with or the server rejects it. Nothing
-// here currently tells a joiner what a room's is_turn actually is before
-// they try - that's a known gap, not something this module tries to
-// solve.
+// match what the room was created with or the server rejects it. A
+// scanned/shared join link can pre-check this box via prefill_is_turn -
+// index.mts reads a turn=1 query param (see qr_join.mts) and calls that
+// before the user ever sees the form, so a joiner doesn't have to guess
+// whether the room they're joining requires it.
 //
 // If the checkbox is checked, a one-time (per browser, via localStorage)
 // accept/reject warning is shown before the join is ever sent, disclosing
@@ -31,6 +32,12 @@
 // index.mts's on_join callback is unaware it happened, since from its
 // perspective the callback is just invoked later than usual (or not at
 // all) - same signature, no new wiring needed on that side.
+//
+// trigger_join() exists so index.mts's auto-join path (opening a scanned
+// link with a device name already remembered) goes through this exact
+// same validation/consent flow instead of bypassing it - it reads the
+// same device-name/room-code/is_turn inputs a manual click would, so
+// index.mts only needs to prefill those fields correctly beforehand.
 
 import QRCode from "qrcode";
 
@@ -75,11 +82,19 @@ export interface RoomUi {
   ): void;
   get_signaling_url(): string;
   prefill_room_code(room_code: string): void;
+  prefill_is_turn(is_turn: boolean): void;
   get_device_name(): string;
   prefill_device_name(device_name: string): void;
   show_join_qr_code(join_url: string): Promise<void>;
   collapse_join_qr_code(): void;
   clear_join_qr_code(): void;
+  // Runs the exact same validation/consent-gated flow a manual click on
+  // the join button would - reads device name, room code, and the
+  // use-turn checkbox straight from the DOM. Callers (index.mts's
+  // auto-join path) must prefill those fields first; this does not accept
+  // parameters of its own, specifically so there's only one join code
+  // path to keep correct.
+  trigger_join(): void;
 }
 
 function require_element<T extends HTMLElement>(id: string): T {
@@ -185,38 +200,44 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
     });
   }
 
+  // Shared by the join button's click listener and trigger_join() - both
+  // must go through the identical validation/consent flow, reading
+  // straight from the DOM inputs rather than accepting parameters, so
+  // there's exactly one place this logic exists.
+  async function attempt_join(): Promise<void> {
+    const device_name = device_name_input.value.trim();
+    if (device_name.length === 0) {
+      ui_log("enter a device name first");
+      return;
+    }
+    if (device_name.length > MAX_DEVICE_NAME_LENGTH) {
+      ui_log(
+        `device name must be ${MAX_DEVICE_NAME_LENGTH} characters or fewer`,
+      );
+      return;
+    }
+    const room_code = room_code_input.value.trim() || undefined;
+    const is_turn = use_turn_checkbox.checked;
+
+    if (is_turn && !has_acknowledged_turn_warning()) {
+      const accepted = await show_turn_warning_modal();
+      if (!accepted) {
+        ui_log("TURN relay declined - join not sent");
+        return;
+      }
+      mark_turn_warning_acknowledged();
+      ui_log("TURN relay use acknowledged");
+    }
+
+    callbacks.on_join(device_name, room_code, is_turn);
+  }
+
   connect_button.addEventListener("click", () => {
     callbacks.on_connect(ws_url_input.value);
   });
 
   join_button.addEventListener("click", () => {
-    void (async () => {
-      const device_name = device_name_input.value.trim();
-      if (device_name.length === 0) {
-        ui_log("enter a device name first");
-        return;
-      }
-      if (device_name.length > MAX_DEVICE_NAME_LENGTH) {
-        ui_log(
-          `device name must be ${MAX_DEVICE_NAME_LENGTH} characters or fewer`,
-        );
-        return;
-      }
-      const room_code = room_code_input.value.trim() || undefined;
-      const is_turn = use_turn_checkbox.checked;
-
-      if (is_turn && !has_acknowledged_turn_warning()) {
-        const accepted = await show_turn_warning_modal();
-        if (!accepted) {
-          ui_log("TURN relay declined - join not sent");
-          return;
-        }
-        mark_turn_warning_acknowledged();
-        ui_log("TURN relay use acknowledged");
-      }
-
-      callbacks.on_join(device_name, room_code, is_turn);
-    })();
+    void attempt_join();
   });
 
   leave_button.addEventListener("click", () => {
@@ -316,6 +337,10 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       room_code_input.value = room_code;
     },
 
+    prefill_is_turn(is_turn) {
+      use_turn_checkbox.checked = is_turn;
+    },
+
     get_device_name() {
       return device_name_input.value.trim();
     },
@@ -339,6 +364,10 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       qr_code_el.innerHTML = "";
       join_link_el.textContent = "";
       qr_details_el.open = false;
+    },
+
+    trigger_join() {
+      void attempt_join();
     },
   };
 }
