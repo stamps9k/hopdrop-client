@@ -192,7 +192,15 @@ async function get_or_create_peer_connection(
   try {
     return await creation_promise;
   } finally {
-    pending_peer_connections.delete(device_id);
+    // Only remove OUR entry - if a newer creation_promise for this same
+    // device_id has already replaced ours in the map (e.g. leaving and
+    // immediately rejoining the same room while this same peer is still
+    // present), deleting unconditionally here would remove the NEW
+    // in-flight entry instead, right as it starts. Comparing by reference
+    // (not just key) is what makes this safe.
+    if (pending_peer_connections.get(device_id) === creation_promise) {
+      pending_peer_connections.delete(device_id);
+    }
   }
 }
 
