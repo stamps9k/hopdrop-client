@@ -46,44 +46,28 @@
 
 /* Custom text for things that need to pop against the dark background */
 .text-terminal {
-	color: #0f0;
+  color: #0f0;
 }
 
 /* Custom Special size for the qr-vode svg image */
-#qr-code svg { 
-	width: 200px; height: 200px; 
+#qr-code svg {
+  width: 200px;
+  height: 200px;
 }
 
 /* Custom special styling for the webapp logs */
-#log { 
-	white-space: pre-wrap; 
-	background: #111; 
-	padding: 1rem; 
-	height: 45vh; 
-	overflow-y: auto; 
-	margin-bottom: 0.5rem; 
+#log {
+  white-space: pre-wrap;
+  background: #111;
+  padding: 1rem;
+  height: 45vh;
+  overflow-y: auto;
+  margin-bottom: 0.5rem;
 }
 
 /* Custom underline for heading 6 */
 h6 {
-	text-decoration: underline;
-}
-
-/* Custom modal dialog styling */
-#turn-warning-modal {
-	display: none; 
-	position: fixed; 
-	inset: 100px; 
-	align-items: center; 
-	justify-content: center; 
-	z-index: 1050;
-}
-
-/* Custom fading applied to webapp when modal dialog box is shown */
-.app-dimmed {
-	opacity: 0.5;
-	transition: opacity 0.2s ease;
-	pointer-events: none;
+  text-decoration: underline;
 }
 
 /*
@@ -92,6 +76,8 @@ h6 {
 body {
   text-shadow: 0 0.05rem 0.1rem rgba(0, 0, 0, 0.5);
   box-shadow: inset 0 0 5rem rgba(0, 0, 0, 0.5);
+  background: #14161c;
+  color: #e7e8ee;
 }
 
 .cover-container {
@@ -107,23 +93,8 @@ canvas {
 /*
  * Header
  */
-.nav-masthead .nav-link {
-  color: rgba(255, 255, 255, 0.5) !important;
-  border-bottom: 0.25rem solid transparent;
-}
-
-.nav-masthead .nav-link:hover,
-.nav-masthead .nav-link:focus {
-  border-bottom-color: rgba(255, 255, 255, 0.25);
-}
-
-.nav-masthead .nav-link + .nav-link {
-  margin-left: 1rem;
-}
-
-.nav-masthead .active {
-  color: #fff;
-  border-bottom-color: #fff;
+.navbar-toggler:focus {
+  box-shadow: none;
 }
 
 /* Menu overlays the page on small screens instead of pushing content down */
@@ -134,22 +105,132 @@ canvas {
     left: 0;
     right: 0;
     z-index: 1030;
-    margin-top: .5rem;
-    padding: .5rem 1rem;
+    margin-top: 0.5rem;
+    padding: 0.5rem 1rem;
     background-color: #1a1d20;
-    border: 1px solid rgba(255, 255, 255, .15);
-    border-radius: .5rem;
-    box-shadow: 0 .75rem 2rem rgba(0, 0, 0, .5);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 0.5rem;
+    box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.5);
   }
 }
 
-/* Horizontal menu, always visible from md up: restore the original side-by-side layout */
-@media (min-width: 768px) {
-  .nav-masthead .nav-link {
-    padding: .25rem 0;
-  }
+/*
+ * stampatron.com brand hooks - matches css/cover.css on the main site
+ * (fonts, accent color, dot mark). Everything else here is stock
+ * Bootstrap 5.3.
+ */
+:root {
+  --bs-body-font-family: "Inter", system-ui, sans-serif;
+  --bs-font-monospace: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --accent: #e2a54d; /* amber - primary brand accent */
+  --accent-2: #5cc9bd; /* teal - secondary accent, matches main site */
+}
+.dot-accent {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  display: inline-block;
+}
+.text-accent {
+  color: var(--accent) !important;
+}
+.text-accent-2 {
+  color: var(--accent-2) !important;
+}
+.border-accent-subtle {
+  border-color: rgba(226, 165, 77, 0.35) !important;
+}
+.bg-accent-2-subtle {
+  background-color: rgba(92, 201, 189, 0.15) !important;
+}
+.icon-badge {
+  width: 40px;
+  height: 40px;
+}
+.hover-card {
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+.hover-card:hover {
+  border-color: var(--accent) !important;
+  transform: translateY(-2px);
+}
+.btn-accent {
+  --bs-btn-color: #1a1406;
+  --bs-btn-bg: var(--accent);
+  --bs-btn-border-color: var(--accent);
+  --bs-btn-hover-color: #1a1406;
+  --bs-btn-hover-bg: #eab568;
+  --bs-btn-hover-border-color: #eab568;
+  --bs-btn-active-color: #1a1406;
+  --bs-btn-active-bg: #d1943f;
+  --bs-btn-active-border-color: #d1943f;
+  --bs-btn-focus-shadow-rgb: 226, 165, 77;
+}
+.border-dashed {
+  border-style: dashed !important;
+}
+#dropzone {
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+#dropzone:hover,
+#dropzone:focus-visible {
+  border-color: var(--accent) !important;
+}
+/* Gives the QR/join-link wrapper its own block formatting context so its
+   child elements' top margins don't collapse through it - otherwise the
+   open/close height animation in room_ui.mts measures a few px short. */
+#qr-details-content {
+  display: flow-root;
+}
 
-  .nav-masthead .nav-link + .nav-link {
-    margin-left: 1rem;
-  }
+/* Flattens Bootstrap's boxed nav-tabs into the mockup's plain tab strip -
+   monospace labels, faint when inactive, an accent-colored underline
+   (rather than a bordered "folder tab" look) when active. Overrides via
+   #hopdrop-tabs's ID specificity rather than !important, so it still wins
+   over .nav-tabs .nav-link's own hover/active rules. */
+#hopdrop-tabs .nav-link {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 0.625rem 1rem;
+  font-family: var(--bs-font-monospace);
+  font-size: 0.8125rem;
+  color: var(--bs-secondary-color);
+  background: transparent;
+}
+#hopdrop-tabs .nav-link:hover,
+#hopdrop-tabs .nav-link:focus {
+  border-color: transparent;
+  color: var(--bs-body-color);
+}
+#hopdrop-tabs .nav-link.active {
+  background: transparent;
+  color: var(--bs-body-color);
+  font-weight: 700;
+  border-bottom-color: var(--accent);
+}
+
+/* Cards get a slightly lighter surface than the page background (matches
+   the main site's .card convention) - this is what makes bg-body read as
+   an actual darker inlay inside a card (e.g. the Received files list)
+   instead of blending in at the same shade as the card around it. */
+.card {
+  background: #1e212a;
+}
+
+/* The literal page background color (#14161c, set directly on body above
+   rather than via Bootstrap's --bs-body-bg variable, which is never
+   overridden and stays close to .card's own #1e212a) - bg-body reads that
+   unrelated variable, so it renders too close to a card's own background
+   to read as an inlay. Used for surfaces (like the Received files list)
+   that should nearly disappear into the page itself. */
+.bg-page {
+  background-color: #14161c !important;
 }

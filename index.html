@@ -1,169 +1,514 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
   <head>
-		<link rel="icon" type="image/x-icon" href="/favicon/favicon.ico" />
-		<link rel="icon" type="image/png" sizes="32x32" href="/favicon/favicon-32x32.png" />
-		<link rel="icon" type="image/png" sizes="16x16" href="/favicon/favicon-16x16.png" />
-		<link rel="apple-touch-icon" sizes="180x180" href="/favicon/apple-touch-icon.png" />
-		<link rel="manifest" href="/site.webmanifest">
+    <link rel="icon" type="image/x-icon" href="/favicon/favicon.ico" />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="/favicon/favicon-32x32.png" />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href="/favicon/favicon-16x16.png" />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="/favicon/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <meta charset="utf-8" />
-		<meta name="theme-color" content="#712cf9">
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#e2a54d" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hopdrop</title>
-  </head>
-  <body class="d-flex h-100 text-center text-bg-dark">
-		<div class="cover-container d-flex w-100 h-100 p-3 mx-auto flex-column" id="app-root">
-      <header class="mb-auto">
-				<nav class="navbar navbar-dark navbar-expand-md p-0">
-					<div class="container-fluid px-0">
-						<a class="navbar-brand text-white p-0" href="index.html"><h3 class="mb-0">Stampatron</h3></a>
-						<button class="navbar-toggler border-0 shadow-none" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="Toggle navigation">
-							<span class="navbar-toggler-icon"></span>
-						</button>
-						<div class="collapse navbar-collapse" id="mainNav">
-							<ul class="navbar-nav nav-masthead ms-auto">
-								<li class="nav-item"><a class="nav-link fw-bold" aria-current="page" href="index.html">Home</a></li>
-								<li class="nav-item"><a class="nav-link fw-bold active" href="projects.html">Projects</a></li>
-								<li class="nav-item"><a class="nav-link fw-bold" href="cv.html">CV</a></li>
-								<li class="nav-item"><a class="nav-link fw-bold" href="contact.html">Contact</a></li>
-							</ul>
-						</div>
-					</div>
-				</nav>
-  			</header>
-			<h1>Hopdrop</h1>
-			<div class="card text-start">
-				<div class="card-header">
-    			<ul class="nav nav-tabs card-header-tabs" id="hopdrop-tabs" role="tablist">
-						<li class="nav-item presentation">
-        			<button class="nav-link active" id="connect-tab" data-bs-toggle="tab" data-bs-target="#connect-pane" type="button" role="tab" aria-controls="connect-pane" aria-selected="true">Connect</button>
-						</li>
-						<li class="nav-item presentation">
-        			<button class="nav-link" id="send-tab" data-bs-toggle="tab" data-bs-target="#send-pane" type="button" role="tab" aria-controls="send-pane" aria-selected="false">Send</button>
-						</li>
-						<li class="nav-item presentation">
-        			<button class="nav-link" id="send-log" data-bs-toggle="tab" data-bs-target="#log-pane" type="button" role="tab" aria-controls="send-pane" aria-selected="false">Logs</button>
-						</li>
-					</ul>
-				</div>
-				
-				<div class="card-body tab-content">
-					<div class="tab-pane fade show active" id="connect-pane" role="tabpanel" aria-labelledby="connect-tab" tabindex="0">
-						<div class="row p-1 border">
-							<div id="controls-connect" class="text-start col-md-8">
-								<input id="ws-url" size="30" value="%VITE_SIGNALING_URL%" />
-							</div>
-							<div class="text-start col-md-2">
-								<button id="connect">connect</button>
-							</div>
-							<div class="text-center col-md-2">
-								<i id="connect-status" class="bi bi-x-circle"></i>
-							</div>
-						</div>
-						<div class="row p-1 border">
-							<div id="control-app" class="text-start col-md-8">
-								<input id="device-name" placeholder="your device name" size="18" maxlength="40" />
-								<input id="room-code" placeholder="room code (blank = create)" size="20" />
-								<div class="form-check form-check-inline">
-									<input class="form-check-input" type="checkbox" id="use-turn" />
-									<label class="form-check-label" for="use-turn">Use TURN relay</label>
-								</div>
-							</div>
-							<div class="text-start col-md-2">
-								<button id="join">join</button>
-								<button id="leave">leave</button>
-							</div>
-							<div class="text-center col-md-2">
-									<i id="room-status" class="bi bi-x-circle"></i>
-							</div>
-						</div>
-					</div>
 
-					<div class="tab-pane fade" id="send-pane" role="tabpanel" aria-labelledby="connect-tab" tabindex="0">
-						<div class="row p-1">
-							<h6>Recipient</h6>
-							<div id="transfer-controls" class="text-start col-sm">
-								<select id="peer-select"><option value="">(no open channels yet)</option></select>
-							</div>
-						</div>
-						<div class="row p-1">
-							<h6>File</h6>
-							<div class="col-md-4">
-								<input id="file-input" type="file" />
-							</div>
-							<div class="col-md-2">
-								<button id="send-file">send file</button>
-							</div>
-							<div class="col-md-6">
-								<progress id="send-progress" value="0" max="100" style="display: none;"></progress>
-								<span id="send-progress-label"></span>
-							</div>
-						</div>
-					</div>
-					<div class="tab-pane fade" id="log-pane" role="tabpanel" aria-labelledby="connect-tab" tabindex="0">
-						<div id="log" class="text-start text-terminal"></div>
-					</div>
-				</div>
-			</div>
-			<div id="status" class="text-terminal text-start">Not connected</div>
-			<div class="row p-1">
-				<details id="qr-details">
-					<summary>Show QR code / join link</summary>
-					<div id="qr-code"></div>
-					<div id="join-link"></div>
-				</details>
-			</div>
-			<div class="border border-light card-body p-1 text-start">
-				<h6>Received Files</h6>
-				<ul id="downloads">
-					<li>Nothing yet</li>
-				</ul>
-			</div>
-			<main>
-				<script type="module" src="./src/index.mts"></script>
-				<p>
-					<a href="./notes.html">Notes</a> |
-					<a target="_" href="https://github.com/stamps9k/hopdrop-client">
-						Source Code
-					</a>
-				</p>
-			</main>
-			<footer class="mt-auto text-white-50">
-			<p>
-				Stampatron site created using
-				<a href="https://getbootstrap.com/" class="text-white">Bootstrap</a>
-				sample code, by
-				<a href="https://twitter.com/mdo" class="text-white">@mdo</a>.
-			</p>
-		</footer>
-		</div>
-		<div id="turn-warning-modal">
-			<div class="modal-dialog">
-				<div class="modal-content bg-light text-dark p-2 rounded-2">
-					<div class="modal-header">
-						<h5 class="modal-title">TURN Relay Enabled</h5>
-					</div>
-					<div class="modal-body text-start">
-						<p>
-							This room uses a TURN relay server (Metered) to help connect
-							devices that can't reach each other directly.
-						</p>
-						<p>
-							When a direct connection isn't possible, your file data is
-							routed through Metered's servers instead of going straight
-							between your devices. The connection stays end-to-end
-							encrypted — Metered relays the encrypted traffic but can't
-							read its contents — though it can see connection metadata,
-							such as your devices' IP addresses and how much data was
-							transferred.
-						</p>
-					</div>
-					<div class="modal-footer">
-						<button type="button" class="btn btn-secondary mx-1" id="turn-warning-reject">Reject</button>
-						<button type="button" class="btn btn-primary mx-1" id="turn-warning-accept">I Understand</button>
-					</div>
-				</div>
-			</div>
-		</div>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" />
+  </head>
+  <body class="d-flex flex-column min-vh-100 text-center">
+    <nav class="navbar navbar-expand-md sticky-top border-bottom bg-body">
+      <div class="container">
+        <a
+          class="navbar-brand fw-bold font-monospace d-flex align-items-center gap-2"
+          href="https://www.stampatron.com/">
+          <span class="dot-accent" aria-hidden="true"></span
+          ><span class="text-body">STAMPATRON.COM</span>
+        </a>
+        <button
+          class="navbar-toggler"
+          type="button"
+          data-bs-toggle="collapse"
+          data-bs-target="#mainNav"
+          aria-controls="mainNav"
+          aria-expanded="false"
+          aria-label="Toggle navigation">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="mainNav">
+          <ul class="navbar-nav ms-auto mb-2 mb-md-0 font-monospace">
+            <li class="nav-item">
+              <a class="nav-link" href="https://www.stampatron.com/">Home</a>
+            </li>
+            <li class="nav-item">
+              <a
+                class="nav-link"
+                href="https://www.stampatron.com/projects.html"
+                >Projects</a
+              >
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="https://www.stampatron.com/cv.html"
+                >CV</a
+              >
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="https://www.stampatron.com/contact.html"
+                >Contact</a
+              >
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div
+      class="cover-container d-flex w-100 p-3 mx-auto flex-column flex-grow-1">
+      <span
+        class="badge rounded-pill bg-accent-2-subtle text-accent-2 font-monospace fw-normal small mb-3 d-inline-flex align-items-center gap-1 align-self-center">
+        peer-to-peer &middot; end-to-end encrypted
+      </span>
+      <h1 class="fw-bold font-monospace mb-2">Hopdrop</h1>
+      <p class="lead text-body-secondary mb-4">
+        Peer-to-peer file transfer between your own devices &mdash; encrypted,
+        no server storage.
+      </p>
+      <div class="d-flex flex-wrap justify-content-center gap-2 mb-3">
+        <a class="btn btn-accent fw-bold font-monospace" href="#app"
+          >Start a transfer &rarr;</a
+        >
+        <a
+          class="btn btn-outline-light font-monospace"
+          target="_blank"
+          rel="noopener noreferrer"
+          href="https://github.com/stamps9k/hopdrop-client"
+          >View the code</a
+        >
+      </div>
+      <p class="small font-monospace text-body-secondary mb-4">
+        Direct connection fails occasionally on strict networks &mdash; a relay
+        steps in only then, and never sees your file's contents.
+      </p>
+
+      <div class="row row-cols-1 row-cols-md-3 g-3 mb-4">
+        <div class="col">
+          <div class="card h-100 border-accent-subtle hover-card">
+            <div class="card-body">
+              <div
+                class="icon-badge bg-accent-2-subtle text-accent-2 d-inline-flex align-items-center justify-content-center rounded-2 mb-3">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6">
+                  <circle cx="12" cy="12" r="3" />
+                  <path
+                    d="M12 2v4M12 18v4M4.2 4.2l2.9 2.9M16.9 16.9l2.9 2.9M2 12h4M18 12h4M4.2 19.8l2.9-2.9M16.9 7.1l2.9-2.9" />
+                </svg>
+              </div>
+              <h3 class="h6 card-title">Direct connection</h3>
+              <p class="card-text text-body-secondary small mb-0">
+                One device opens a channel, the other scans a code or link to
+                join &mdash; WebRTC handles the rest.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="card h-100 border-accent-subtle hover-card">
+            <div class="card-body">
+              <div
+                class="icon-badge bg-accent-2-subtle text-accent-2 d-inline-flex align-items-center justify-content-center rounded-2 mb-3">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6">
+                  <rect x="5" y="11" width="14" height="9" rx="1.5" />
+                  <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                </svg>
+              </div>
+              <h3 class="h6 card-title">Encrypted end to end</h3>
+              <p class="card-text text-body-secondary small mb-0">
+                Traffic stays encrypted the whole trip &mdash; even a relay
+                carrying it can't read the contents.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="card h-100 border-accent-subtle hover-card">
+            <div class="card-body">
+              <div
+                class="icon-badge bg-accent-2-subtle text-accent-2 d-inline-flex align-items-center justify-content-center rounded-2 mb-3">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6">
+                  <path d="M3 12a9 9 0 1 0 9-9" />
+                  <path d="M3 5v7h7" />
+                </svg>
+              </div>
+              <h3 class="h6 card-title">Nothing kept</h3>
+              <p class="card-text text-body-secondary small mb-0">
+                The file never lands on a server &mdash; close both tabs and
+                there's no copy left anywhere but the two devices.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="app" class="card text-start">
+        <div class="card-header">
+          <ul
+            class="nav nav-tabs card-header-tabs"
+            id="hopdrop-tabs"
+            role="tablist">
+            <li class="nav-item presentation">
+              <button
+                class="nav-link active"
+                id="connect-tab"
+                data-bs-toggle="tab"
+                data-bs-target="#connect-pane"
+                type="button"
+                role="tab"
+                aria-controls="connect-pane"
+                aria-selected="true">
+                Connect
+              </button>
+            </li>
+            <li class="nav-item presentation">
+              <button
+                class="nav-link"
+                id="send-tab"
+                data-bs-toggle="tab"
+                data-bs-target="#send-pane"
+                type="button"
+                role="tab"
+                aria-controls="send-pane"
+                aria-selected="false">
+                Send
+              </button>
+            </li>
+            <li class="nav-item presentation">
+              <button
+                class="nav-link"
+                id="send-log"
+                data-bs-toggle="tab"
+                data-bs-target="#log-pane"
+                type="button"
+                role="tab"
+                aria-controls="send-pane"
+                aria-selected="false">
+                Logs
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <div class="card-body tab-content">
+          <div
+            class="tab-pane fade show active"
+            id="connect-pane"
+            role="tabpanel"
+            aria-labelledby="connect-tab"
+            tabindex="0">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+              <input
+                id="ws-url"
+                type="text"
+                class="form-control form-control-sm w-auto"
+                size="30"
+                value="%VITE_SIGNALING_URL%" />
+              <button id="connect" class="btn btn-outline-secondary btn-sm">
+                Connect
+              </button>
+              <span
+                id="status"
+                class="small font-monospace text-body-secondary ms-auto"
+                >Not connected</span
+              >
+              <i
+                id="connect-status"
+                class="bi bi-x-circle-fill text-danger fs-5"></i>
+            </div>
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+              <input
+                id="device-name"
+                placeholder="your device name"
+                maxlength="40"
+                class="form-control form-control-sm w-auto" />
+              <input
+                id="room-code"
+                placeholder="room code (blank = create)"
+                class="form-control form-control-sm w-auto" />
+              <div class="form-check form-switch mb-0 ms-auto">
+                <input
+                  class="form-check-input"
+                  type="checkbox"
+                  role="switch"
+                  id="use-turn" />
+                <label class="form-check-label" for="use-turn"
+                  >Use TURN relay</label
+                >
+              </div>
+            </div>
+
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <div
+                  class="border border-dashed rounded-3 p-3 text-center h-100 d-flex flex-column justify-content-center position-relative">
+                  <i
+                    id="room-status"
+                    class="bi bi-x-circle-fill text-danger fs-5 position-absolute top-0 start-0 m-2"></i>
+                  <details id="qr-details" class="mb-0">
+                    <summary class="small font-monospace text-body-secondary">
+                      Show QR code / join link
+                    </summary>
+                    <div id="qr-details-content">
+                      <div
+                        id="qr-code"
+                        class="mt-2 d-flex justify-content-center"></div>
+                      <div
+                        id="join-link"
+                        class="small text-body-secondary mt-1"></div>
+                    </div>
+                  </details>
+                </div>
+              </div>
+              <div
+                class="col-md-6 d-flex flex-column justify-content-center gap-2">
+                <button id="join" class="btn btn-primary w-100">Join</button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="tab-pane fade"
+            id="send-pane"
+            role="tabpanel"
+            aria-labelledby="connect-tab"
+            tabindex="0">
+            <div class="mb-3">
+              <label
+                class="form-label small text-body-secondary mb-1"
+                for="peer-select"
+                >Recipient</label
+              >
+              <select
+                id="peer-select"
+                class="form-select form-select-sm w-auto">
+                <option value="">(no open channels yet)</option>
+              </select>
+            </div>
+
+            <div
+              id="dropzone"
+              class="border border-dashed rounded-3 p-4 text-center mb-3"
+              role="button"
+              tabindex="0">
+              <svg
+                id="dropzone-icon"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                class="text-accent mb-2">
+                <path d="M12 3v12M7 8l5-5 5 5" />
+                <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+              </svg>
+              <p id="dropzone-label" class="small text-body-secondary mb-0">
+                Drag &amp; drop a file here, or
+                <span class="text-accent-2">click to browse</span>
+              </p>
+              <input id="file-input" type="file" class="d-none" />
+            </div>
+            <div class="d-flex justify-content-center mb-3">
+              <button id="send-file" class="btn btn-primary btn-sm">
+                Send file
+              </button>
+            </div>
+
+            <div class="d-flex align-items-center gap-2">
+              <progress
+                id="send-progress"
+                value="0"
+                max="100"
+                class="w-50"
+                style="display: none"></progress>
+              <span
+                id="send-progress-label"
+                class="small text-body-secondary"></span>
+            </div>
+          </div>
+
+          <div
+            class="tab-pane fade"
+            id="log-pane"
+            role="tabpanel"
+            aria-labelledby="connect-tab"
+            tabindex="0">
+            <div id="log" class="text-start text-terminal"></div>
+          </div>
+        </div>
+
+        <div class="card-body border-top">
+          <p
+            class="small text-body-secondary text-uppercase mb-2"
+            style="letter-spacing: 0.05em">
+            Received files
+          </p>
+          <div class="bg-page rounded-3 p-3">
+            <ul id="downloads" class="list-group list-group-flush mb-0">
+              <li
+                class="list-group-item bg-transparent text-body-secondary px-0 text-center">
+                Nothing yet
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <main>
+        <script type="module" src="./src/index.mts"></script>
+        <p class="small text-body-secondary mt-3">
+          <a href="./notes.html">Notes</a> &middot;
+          <a
+            target="_blank"
+            rel="noopener noreferrer"
+            href="https://github.com/stamps9k/hopdrop-client">
+            Source Code
+          </a>
+        </p>
+      </main>
+    </div>
+
+    <footer class="border-top py-4">
+      <div
+        class="container d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <div class="fw-bold font-monospace d-flex align-items-center gap-2">
+            <span class="dot-accent" aria-hidden="true"></span>STAMPATRON
+          </div>
+          <p class="text-body-secondary small mb-0">
+            Fukuoka, Japan &mdash; built one frame at a time.
+          </p>
+        </div>
+        <div class="d-flex gap-2">
+          <a
+            class="btn btn-outline-secondary btn-sm rounded-circle d-inline-flex align-items-center justify-content-center"
+            style="width: 36px; height: 36px"
+            target="_blank"
+            rel="noopener noreferrer"
+            href="https://github.com/stamps9k?tab=repositories"
+            aria-label="GitHub">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M12 .5C5.73.5.5 5.73.5 12c0 5.09 3.29 9.4 7.86 10.93.57.1.79-.25.79-.55v-2.15c-3.2.7-3.88-1.36-3.88-1.36-.52-1.34-1.28-1.7-1.28-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.25.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.08 0 4.41-2.7 5.38-5.27 5.67.41.36.78 1.07.78 2.16v3.2c0 .3.21.66.8.55C20.21 21.39 23.5 17.09 23.5 12 23.5 5.73 18.27.5 12 .5z" />
+            </svg>
+          </a>
+          <a
+            class="btn btn-outline-secondary btn-sm rounded-circle d-inline-flex align-items-center justify-content-center"
+            style="width: 36px; height: 36px"
+            href="mailto:stampatron1@gmail.com"
+            aria-label="Email">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7">
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <path d="M3 7l9 6 9-6" />
+            </svg>
+          </a>
+          <a
+            class="btn btn-outline-secondary btn-sm rounded-circle d-inline-flex align-items-center justify-content-center"
+            style="width: 36px; height: 36px"
+            target="_blank"
+            rel="noopener noreferrer"
+            href="https://www.stampatron.com/docs/cv.pdf"
+            aria-label="CV">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7">
+              <path d="M7 3h7l5 5v13H7z" />
+              <path d="M14 3v5h5" />
+              <line x1="9" y1="13" x2="15" y2="13" />
+              <line x1="9" y1="17" x2="13" y2="17" />
+            </svg>
+          </a>
+        </div>
+      </div>
+    </footer>
+
+    <div
+      class="modal fade"
+      id="turn-warning-modal"
+      tabindex="-1"
+      data-bs-backdrop="static"
+      data-bs-keyboard="false"
+      aria-hidden="true">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">TURN Relay Enabled</h5>
+          </div>
+          <div class="modal-body text-start">
+            <p>
+              This room uses a TURN relay server (Metered) to help connect
+              devices that can't reach each other directly.
+            </p>
+            <p>
+              When a direct connection isn't possible, your file data is routed
+              through Metered's servers instead of going straight between your
+              devices. The connection stays end-to-end encrypted &mdash; Metered
+              relays the encrypted traffic but can't read its contents &mdash;
+              though it can see connection metadata, such as your devices' IP
+              addresses and how much data was transferred.
+            </p>
+          </div>
+          <div class="modal-footer">
+            <button
+              type="button"
+              class="btn btn-secondary"
+              id="turn-warning-reject">
+              Reject
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary"
+              id="turn-warning-accept">
+              I Understand
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </body>
 </html>

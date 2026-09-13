@@ -40,6 +40,7 @@
 // index.mts only needs to prefill those fields correctly beforehand.
 
 import QRCode from "qrcode";
+import { Modal } from "bootstrap";
 
 // Mirrors hopdrop-signaling's MAX_DEVICE_NAME_LENGTH - the server is the
 // real enforcement point, but validating client-side first avoids a
@@ -58,6 +59,7 @@ export interface PeerOption {
 
 export interface RoomUiCallbacks {
   on_connect: (signaling_url: string) => void;
+  on_disconnect: () => void;
   on_join: (
     device_name: string,
     room_code: string | undefined,
@@ -69,8 +71,19 @@ export interface RoomUiCallbacks {
 
 export interface RoomUi {
   set_status(text: string): void;
-  set_connected_status(): void;
-  set_room_status(joined: boolean): void;
+  // Reflects the signaling socket's actual state (icon + connect/disconnect
+  // button label), driven from index.mts's on_open/on_close handlers so it
+  // stays correct whichever side closed the connection - a manual
+  // disconnect and a server/network-initiated close both end up here via
+  // the same WebSocket "close" event.
+  set_connect_state(connected: boolean): void;
+  // "disconnected": not connected to the signaling server at all.
+  // "waiting": connected to signaling but not currently in a room.
+  // "joined": in a room. Three states rather than a boolean so the icon
+  // can distinguish "nothing to do yet" from "actively disconnected" -
+  // otherwise leaving a room or having one expire looked identical to
+  // losing the signaling connection entirely.
+  set_room_status(state: "disconnected" | "waiting" | "joined"): void;
   log(label: string, data?: unknown): void;
   set_peer_options(peers: PeerOption[]): void;
   set_send_progress(percent: number, label: string): void;
@@ -134,12 +147,13 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const room_code_input = require_element<HTMLInputElement>("room-code");
   const use_turn_checkbox = require_element<HTMLInputElement>("use-turn");
   const join_button = require_element<HTMLButtonElement>("join");
-  const leave_button = require_element<HTMLButtonElement>("leave");
   const room_status_el = require_element<HTMLElement>("room-status");
   const status_el = require_element<HTMLElement>("status");
   const peer_select = require_element<HTMLSelectElement>("peer-select");
   const file_input = require_element<HTMLInputElement>("file-input");
   const send_file_button = require_element<HTMLButtonElement>("send-file");
+  const dropzone_el = require_element<HTMLElement>("dropzone");
+  const dropzone_label_el = require_element<HTMLElement>("dropzone-label");
   const send_progress_el =
     require_element<HTMLProgressElement>("send-progress");
   const send_progress_label_el = require_element<HTMLElement>(
@@ -151,20 +165,120 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const join_link_el = require_element<HTMLElement>("join-link");
   const qr_code_el = require_element<HTMLElement>("qr-code");
   const qr_details_el = require_element<HTMLDetailsElement>("qr-details");
+  const qr_details_summary_maybe_el = qr_details_el.querySelector("summary");
+  if (qr_details_summary_maybe_el === null) {
+    throw new Error("room_ui: qr-details is missing its <summary>");
+  }
+  // Annotated (rather than relying on the null check above to narrow) so
+  // the type stays non-null when referenced from the nested
+  // expand/shrink_qr_details functions below - narrowing from a check
+  // like the one above doesn't carry into a closure's own control-flow
+  // analysis.
+  const qr_details_summary_el: HTMLElement = qr_details_summary_maybe_el;
+  const qr_details_content_el =
+    require_element<HTMLElement>("qr-details-content");
   const turn_warning_modal_el =
     require_element<HTMLElement>("turn-warning-modal");
+  // data-bs-backdrop="static"/data-bs-keyboard="false" on the element
+  // itself keep Bootstrap's own dismiss paths (Escape, backdrop click)
+  // disabled, preserving the "only way out is Accept/Reject" behavior -
+  // Bootstrap's backdrop also handles dimming the rest of the page, so
+  // there's no app-dimmed class to manage here anymore.
+  const turn_warning_modal = new Modal(turn_warning_modal_el);
   const turn_warning_accept_button = require_element<HTMLButtonElement>(
     "turn-warning-accept",
   );
   const turn_warning_reject_button = require_element<HTMLButtonElement>(
     "turn-warning-reject",
   );
-  // The app's main container - gets .app-dimmed toggled while the TURN
-  // warning modal is open. Kept as a plain element reference here rather
-  // than exposed via the RoomUi interface, since dimming is purely a
-  // side-effect of the modal itself, not something index.mts ever needs
-  // to trigger independently.
-  const app_root_el = require_element<HTMLElement>("app-root");
+
+  // Animates the QR-code <details> open/closed instead of letting the
+  // browser snap it instantly, which was disorienting - the surrounding
+  // layout used to jump the instant the box appeared/disappeared. Follows
+  // the standard WAAPI "animate a <details> element's height" pattern:
+  // since the element's natural height isn't known in advance (the QR
+  // code/join link content varies), each direction measures its own
+  // start/end height from the live DOM rather than hard-coding one.
+  let qr_details_animation: Animation | null = null;
+  let qr_details_is_closing = false;
+  let qr_details_is_expanding = false;
+
+  function finish_qr_details_animation(open: boolean): void {
+    qr_details_el.open = open;
+    qr_details_animation = null;
+    qr_details_is_closing = false;
+    qr_details_is_expanding = false;
+    qr_details_el.style.height = "";
+    qr_details_el.style.overflow = "";
+  }
+
+  function expand_qr_details(): void {
+    qr_details_is_expanding = true;
+    const start_height = `${qr_details_el.offsetHeight}px`;
+    const end_height = `${
+      qr_details_summary_el.offsetHeight + qr_details_content_el.offsetHeight
+    }px`;
+    qr_details_animation?.cancel();
+    qr_details_animation = qr_details_el.animate(
+      { height: [start_height, end_height] },
+      { duration: 200, easing: "ease-out" },
+    );
+    qr_details_animation.onfinish = () => finish_qr_details_animation(true);
+    qr_details_animation.oncancel = () => {
+      qr_details_is_expanding = false;
+    };
+  }
+
+  function open_qr_details(): void {
+    if (qr_details_el.open) {
+      return;
+    }
+    qr_details_el.style.overflow = "hidden";
+    qr_details_el.style.height = `${qr_details_el.offsetHeight}px`;
+    qr_details_el.open = true;
+    window.requestAnimationFrame(() => expand_qr_details());
+  }
+
+  function shrink_qr_details(on_closed?: () => void): void {
+    qr_details_is_closing = true;
+    const start_height = `${qr_details_el.offsetHeight}px`;
+    const end_height = `${qr_details_summary_el.offsetHeight}px`;
+    qr_details_animation?.cancel();
+    qr_details_animation = qr_details_el.animate(
+      { height: [start_height, end_height] },
+      { duration: 200, easing: "ease-out" },
+    );
+    qr_details_animation.onfinish = () => {
+      finish_qr_details_animation(false);
+      on_closed?.();
+    };
+    qr_details_animation.oncancel = () => {
+      qr_details_is_closing = false;
+    };
+  }
+
+  // on_closed (used by clear_join_qr_code, below) runs only once the box
+  // has actually finished closing - clearing the QR code/join link
+  // straight away, before the collapse animation runs, left nothing for
+  // it to animate: the box had already snapped down to its emptied
+  // content's height, so the close looked like an instant jump.
+  function close_qr_details(on_closed?: () => void): void {
+    if (!qr_details_el.open) {
+      on_closed?.();
+      return;
+    }
+    qr_details_el.style.overflow = "hidden";
+    shrink_qr_details(on_closed);
+  }
+
+  qr_details_summary_el.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (qr_details_is_closing || !qr_details_el.open) {
+      open_qr_details();
+    } else if (qr_details_is_expanding || qr_details_el.open) {
+      close_qr_details();
+    }
+  });
 
   function ui_log(label: string, data?: unknown): void {
     const line = `[${new Date().toLocaleTimeString()}] ${label}${
@@ -188,15 +302,13 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
         resolve(false);
       }
       function cleanup(): void {
-        turn_warning_modal_el.style.display = "none";
-        app_root_el.classList.remove("app-dimmed");
+        turn_warning_modal.hide();
         turn_warning_accept_button.removeEventListener("click", on_accept);
         turn_warning_reject_button.removeEventListener("click", on_reject);
       }
       turn_warning_accept_button.addEventListener("click", on_accept);
       turn_warning_reject_button.addEventListener("click", on_reject);
-      turn_warning_modal_el.style.display = "flex";
-      app_root_el.classList.add("app-dimmed");
+      turn_warning_modal.show();
     });
   }
 
@@ -232,16 +344,69 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
     callbacks.on_join(device_name, room_code, is_turn);
   }
 
+  let is_connected = false;
+
   connect_button.addEventListener("click", () => {
-    callbacks.on_connect(ws_url_input.value);
+    if (is_connected) {
+      callbacks.on_disconnect();
+    } else {
+      callbacks.on_connect(ws_url_input.value);
+    }
   });
+
+  let is_joined = false;
 
   join_button.addEventListener("click", () => {
-    void attempt_join();
+    if (is_joined) {
+      callbacks.on_leave();
+    } else {
+      void attempt_join();
+    }
   });
 
-  leave_button.addEventListener("click", () => {
-    callbacks.on_leave();
+  // Shows the chosen file's name in the dropzone, replacing the
+  // drag/browse prompt - used whether the file came from a click-to-browse
+  // (native file picker -> file-input's own "change" event) or a drag/drop
+  // (file-input.files is set manually below, which does not fire "change",
+  // so this is called directly in that path too).
+  function show_dropped_file(file: File | undefined): void {
+    if (file === undefined) {
+      dropzone_label_el.innerHTML =
+        'Drag &amp; drop a file here, or <span class="text-accent-2">click to browse</span>';
+      return;
+    }
+    dropzone_label_el.textContent = file.name;
+  }
+
+  dropzone_el.addEventListener("click", () => {
+    file_input.click();
+  });
+  dropzone_el.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      file_input.click();
+    }
+  });
+  file_input.addEventListener("change", () => {
+    show_dropped_file(file_input.files?.[0]);
+  });
+  dropzone_el.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    dropzone_el.classList.add("border-accent-subtle", "bg-accent-2-subtle");
+  });
+  dropzone_el.addEventListener("dragleave", () => {
+    dropzone_el.classList.remove("border-accent-subtle", "bg-accent-2-subtle");
+  });
+  dropzone_el.addEventListener("drop", (event) => {
+    event.preventDefault();
+    dropzone_el.classList.remove("border-accent-subtle", "bg-accent-2-subtle");
+    const data_transfer = event.dataTransfer;
+    const dropped_file = data_transfer?.files?.[0];
+    if (data_transfer === null || dropped_file === undefined) {
+      return;
+    }
+    file_input.files = data_transfer.files;
+    show_dropped_file(dropped_file);
   });
 
   send_file_button.addEventListener("click", () => {
@@ -263,19 +428,43 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       status_el.textContent = text;
     },
 
-    set_connected_status() {
-      connect_status_el.classList.remove("bi-x-circle");
-      connect_status_el.classList.add("bi-hand-thumbs-up-fill");
+    set_connect_state(connected) {
+      is_connected = connected;
+      if (connected) {
+        connect_status_el.classList.remove("bi-x-circle-fill", "text-danger");
+        connect_status_el.classList.add("bi-check-circle-fill", "text-success");
+        connect_button.textContent = "Disconnect";
+      } else {
+        connect_status_el.classList.remove(
+          "bi-check-circle-fill",
+          "text-success",
+        );
+        connect_status_el.classList.add("bi-x-circle-fill", "text-danger");
+        connect_button.textContent = "Connect";
+      }
     },
 
-    set_room_status(joined: boolean) {
-      if (joined) {
-        room_status_el.classList.remove("bi-x-circle");
-        room_status_el.classList.add("bi-hand-thumbs-up-fill");
-      } else {
-        room_status_el.classList.remove("bi-hand-thumbs-up-fill");
-        room_status_el.classList.add("bi-x-circle");
+    set_room_status(state) {
+      is_joined = state === "joined";
+      room_status_el.classList.remove(
+        "bi-x-circle-fill",
+        "text-danger",
+        "bi-dash-circle-fill",
+        "text-accent",
+        "bi-check-circle-fill",
+        "text-success",
+      );
+      if (state === "joined") {
+        room_status_el.classList.add("bi-check-circle-fill", "text-success");
+        join_button.textContent = "Leave";
+      } else if (state === "waiting") {
+        room_status_el.classList.add("bi-dash-circle-fill", "text-accent");
         room_code_input.value = "";
+        join_button.textContent = "Join";
+      } else {
+        room_status_el.classList.add("bi-x-circle-fill", "text-danger");
+        room_code_input.value = "";
+        join_button.textContent = "Join";
       }
     },
 
@@ -325,6 +514,7 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
         hash_verified ? "(hash verified)" : "(HASH MISMATCH)"
       }`;
       const li = document.createElement("li");
+      li.className = "list-group-item bg-transparent px-0";
       li.appendChild(link);
       downloads_el.appendChild(li);
     },
@@ -353,17 +543,18 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       const svg = await QRCode.toString(join_url, { type: "svg" });
       qr_code_el.innerHTML = svg;
       join_link_el.textContent = join_url;
-      qr_details_el.open = true;
+      open_qr_details();
     },
 
     collapse_join_qr_code() {
-      qr_details_el.open = false;
+      close_qr_details();
     },
 
     clear_join_qr_code() {
-      qr_code_el.innerHTML = "";
-      join_link_el.textContent = "";
-      qr_details_el.open = false;
+      close_qr_details(() => {
+        qr_code_el.innerHTML = "";
+        join_link_el.textContent = "";
+      });
     },
 
     trigger_join() {

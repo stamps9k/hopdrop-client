@@ -6,7 +6,8 @@
 
 import "bootstrap/dist/css/bootstrap.min.css";
 import "bootstrap-icons/font/bootstrap-icons.min.css";
-import "bootstrap/dist/js/bootstrap.bundle.min.js";
+import "bootstrap"; // registers data-api listeners for tabs/collapse/etc.,
+// and gives room_ui.mts a typed `import { Modal } from "bootstrap"` to use.
 import "../styles/cover.css";
 
 import {
@@ -73,6 +74,33 @@ const file_receivers = new Map<string, FileReceiver>();
 // device_name itself - trigger_join() reads current form state directly,
 // so this is just a "should we auto-trigger" flag.
 let pending_auto_join = false;
+
+// Tears down everything tied to being in a room - closes peer connections,
+// detaches file receivers, clears negotiation/channel state, and animates
+// the QR/join-link box shut. Shared by every path that means "we're no
+// longer in a room": an explicit Leave click, the room expiring
+// server-side, and losing the signaling connection outright (which used
+// to skip all of this, leaving stale peer connections and a QR box that
+// just vanished instead of collapsing). Safe to call even when there was
+// no room to leave - the maps are already empty and clear_join_qr_code()
+// on an already-closed box is a no-op beyond re-clearing its (already
+// empty) content.
+function reset_room_state(): void {
+  reset_turn_state();
+  for (const pc of peer_connections.values()) {
+    pc.close();
+  }
+  for (const receiver of file_receivers.values()) {
+    receiver.detach();
+  }
+  peer_connections.clear();
+  pending_peer_connections.clear();
+  file_receivers.clear();
+  open_channels.clear();
+  clear_all_negotiation_state();
+  refresh_peer_select();
+  ui.clear_join_qr_code();
+}
 
 function refresh_peer_select(): void {
   const peers: PeerOption[] = [...open_channels.keys()].map((device_id) => ({
@@ -244,7 +272,8 @@ function connect_to_signaling(url: string): void {
   socket = create_signaling_socket(url, {
     on_open: () => {
       ui.set_status("Connected to signaling");
-      ui.set_connected_status();
+      ui.set_connect_state(true);
+      ui.set_room_status("waiting");
       ui.log("signaling OPEN");
       if (pending_auto_join) {
         pending_auto_join = false;
@@ -259,6 +288,9 @@ function connect_to_signaling(url: string): void {
     },
     on_close: (event) => {
       ui.set_status("Disconnected");
+      ui.set_connect_state(false);
+      ui.set_room_status("disconnected");
+      reset_room_state();
       ui.log("signaling CLOSE", { code: event.code, reason: event.reason });
     },
     on_socket_error: () => ui.log("signaling SOCKET ERROR"),
@@ -274,7 +306,7 @@ function connect_to_signaling(url: string): void {
         `Room ${message.room_code} - I am "${message.device_name}"`,
       );
       ui.log("room-created", message);
-      ui.set_room_status(true);
+      ui.set_room_status("joined");
       ui.prefill_room_code(message.room_code);
       const join_url = build_join_url(
         window.location.href,
@@ -294,7 +326,7 @@ function connect_to_signaling(url: string): void {
         `Room ${message.room_code} - I am "${message.device_name}"`,
       );
       ui.log("room-joined", message);
-      ui.set_room_status(true);
+      ui.set_room_status("joined");
       const peers = register_existing_peers(message);
       for (const peer of peers) {
         await initiate_offer_if_caller(peer.device_id);
@@ -335,10 +367,9 @@ function connect_to_signaling(url: string): void {
       // the client can't yet tell these apart. Rejects any peer connection
       // currently waiting on TURN credentials so it can bail out cleanly
       // instead of hanging.
-      reset_turn_state();
-      ui.set_room_status(false);
-      ui.clear_join_qr_code();
+      ui.set_room_status("waiting");
       ui.set_status("Connected to signaling");
+      reset_room_state();
     },
 
     on_turn_credentials: (message) => {
@@ -410,6 +441,15 @@ const ui = create_room_ui({
     connect_to_signaling(url);
   },
 
+  on_disconnect() {
+    // The actual icon/button flip happens in on_close above, once the
+    // socket confirms it's actually shut - same path a server-initiated
+    // or network-dropped close goes through, so there's one source of
+    // truth for "are we connected" regardless of who ended it.
+    socket?.close();
+    ui.log("disconnecting");
+  },
+
   on_join(device_name, room_code, is_turn) {
     if (socket === null || socket.ready_state !== WebSocket.OPEN) {
       ui.log("still connecting to the server - try again in a moment");
@@ -428,21 +468,9 @@ const ui = create_room_ui({
   on_leave() {
     socket?.leave();
     ui.log("sent leave");
-    ui.set_room_status(false);
-    reset_turn_state();
-    for (const pc of peer_connections.values()) {
-      pc.close();
-    }
-    for (const receiver of file_receivers.values()) {
-      receiver.detach();
-    }
-    peer_connections.clear();
-    pending_peer_connections.clear();
-    file_receivers.clear();
-    open_channels.clear();
-    clear_all_negotiation_state();
-    refresh_peer_select();
-    ui.clear_join_qr_code();
+    ui.set_room_status("waiting");
+    ui.set_status("Connected to signaling");
+    reset_room_state();
   },
 
   on_send_file(device_id, file) {
