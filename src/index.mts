@@ -4,12 +4,6 @@
 // manipulation. This file owns state and orchestration; room_ui.mts owns
 // presentation.
 
-import "bootstrap/dist/css/bootstrap.min.css";
-import "bootstrap-icons/font/bootstrap-icons.min.css";
-import "bootstrap"; // registers data-api listeners for tabs/collapse/etc.,
-// and gives room_ui.mts a typed `import { Modal } from "bootstrap"` to use.
-import "../styles/cover.css";
-
 import {
   create_signaling_socket,
   type SignalingSocket,
