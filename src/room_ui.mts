@@ -40,7 +40,16 @@
 // index.mts only needs to prefill those fields correctly beforehand.
 
 import QRCode from "qrcode";
-import { Modal } from "bootstrap";
+
+// Bootstrap's JS is loaded globally via CDN <script> in index.html (see
+// index.html and the project's ways-of-working notes) rather than bundled
+// through npm, so we only pull in its types here and reach the runtime
+// class off `window.bootstrap`.
+declare global {
+  interface Window {
+    bootstrap: typeof import("bootstrap");
+  }
+}
 
 // Mirrors hopdrop-signaling's MAX_DEVICE_NAME_LENGTH - the server is the
 // real enforcement point, but validating client-side first avoids a
@@ -184,7 +193,7 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   // disabled, preserving the "only way out is Accept/Reject" behavior -
   // Bootstrap's backdrop also handles dimming the rest of the page, so
   // there's no app-dimmed class to manage here anymore.
-  const turn_warning_modal = new Modal(turn_warning_modal_el);
+  const turn_warning_modal = new window.bootstrap.Modal(turn_warning_modal_el);
   const turn_warning_accept_button = require_element<HTMLButtonElement>(
     "turn-warning-accept",
   );
