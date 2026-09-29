@@ -55,6 +55,14 @@ const peer_connections = new Map<string, PeerConnection>();
 const pending_peer_connections = new Map<string, Promise<PeerConnection>>();
 const open_channels = new Map<string, RTCDataChannel>();
 const file_receivers = new Map<string, FileReceiver>();
+// Display names for peers with an open data channel, captured from
+// rtc_negotiation.mts's state the moment the channel opens. Kept here
+// rather than read back from rtc_negotiation.mts on demand because that
+// module's state is signaling-scoped - it's cleared when the signaling
+// socket closes or the room ends - while an open peer connection outlives
+// both. Without this copy, the send tab's peer list would lose its names
+// the moment signaling dropped.
+const connected_peer_names = new Map<string, string>();
 
 // Set only when a device name is already remembered from a previous visit
 // AND the page was opened via a scanned QR / shared join link - in that
@@ -69,29 +77,48 @@ const file_receivers = new Map<string, FileReceiver>();
 // so this is just a "should we auto-trigger" flag.
 let pending_auto_join = false;
 
-// Tears down everything tied to being in a room - closes peer connections,
-// detaches file receivers, clears negotiation/channel state, and animates
-// the QR/join-link box shut. Shared by every path that means "we're no
-// longer in a room": an explicit Leave click, the room expiring
-// server-side, and losing the signaling connection outright (which used
-// to skip all of this, leaving stale peer connections and a QR box that
-// just vanished instead of collapsing). Safe to call even when there was
-// no room to leave - the maps are already empty and clear_join_qr_code()
-// on an already-closed box is a no-op beyond re-clearing its (already
-// empty) content.
-function reset_room_state(): void {
+// Fully tears down one peer: closes its RTCPeerConnection (and with it the
+// data channel), detaches its file receiver, and forgets it everywhere.
+// Idempotent - safe to call for a peer that's already gone, which matters
+// because closing a connection can itself fire the data channel's close
+// event, which calls back in here.
+function close_peer(device_id: string): void {
+  const pc = peer_connections.get(device_id);
+  peer_connections.delete(device_id);
+  open_channels.delete(device_id);
+  connected_peer_names.delete(device_id);
+  file_receivers.get(device_id)?.detach();
+  file_receivers.delete(device_id);
+  pc?.close();
+  refresh_peer_select();
+}
+
+// Tears down everything that depends on the signaling server - shared by
+// every path that means "we're no longer in a room": an explicit Leave
+// click, the room expiring server-side, and losing the signaling
+// connection outright. Deliberately does NOT touch peer connections whose
+// data channel is already open: once the handshake is done, file data
+// flows directly between the two browsers and never needs the signaling
+// server again, so losing it (e.g. nginx closing an idle WebSocket
+// mid-transfer) must not interrupt a transfer. Those connections end only
+// when their own data channel closes or the connection fails - see
+// on_data_channel_close and on_connection_state_change.
+//
+// Peer connections that haven't opened a data channel yet are closed,
+// though: they're still mid-handshake, and with signaling gone the
+// remaining SDP/ICE messages can never arrive. Any creation still in
+// flight bails out on its own - reset_turn_state() rejects a pending TURN
+// wait, and clearing negotiation state makes get_or_create_peer_connection's
+// post-await get_peer_state check fail.
+function reset_signaling_state(): void {
   reset_turn_state();
-  for (const pc of peer_connections.values()) {
-    pc.close();
-  }
-  for (const receiver of file_receivers.values()) {
-    receiver.detach();
-  }
-  peer_connections.clear();
-  pending_peer_connections.clear();
-  file_receivers.clear();
-  open_channels.clear();
   clear_all_negotiation_state();
+  pending_peer_connections.clear();
+  for (const device_id of [...peer_connections.keys()]) {
+    if (!open_channels.has(device_id)) {
+      close_peer(device_id);
+    }
+  }
   refresh_peer_select();
   ui.clear_join_qr_code();
 }
@@ -99,11 +126,10 @@ function reset_room_state(): void {
 function refresh_peer_select(): void {
   const peers: PeerOption[] = [...open_channels.keys()].map((device_id) => ({
     device_id,
-    // Falls back to the raw id only if negotiation state is somehow
-    // missing for an open channel, which shouldn't happen in practice -
-    // every open channel's peer was registered via register_existing_peers
-    // or register_new_peer before the channel could open.
-    device_name: get_peer_state(device_id)?.device_name ?? device_id,
+    // Falls back to the raw id only if no name was captured when the
+    // channel opened, which shouldn't happen in practice - see
+    // on_data_channel_open.
+    device_name: connected_peer_names.get(device_id) ?? device_id,
   }));
   ui.set_peer_options(peers);
 }
@@ -148,10 +174,25 @@ async function get_or_create_peer_connection(
 
         on_connection_state_change: (state) => {
           ui.log(`connection state [${device_id}]`, state);
+          // The peer connection's own health is what decides its lifetime,
+          // not signaling. "disconnected" can recover by itself, so only
+          // the terminal states tear down - e.g. the other device closed
+          // its tab without its data channel closing cleanly first, and
+          // ICE consent checks eventually gave up.
+          if (state === "failed" || state === "closed") {
+            close_peer(device_id);
+          }
         },
 
         on_data_channel_open: (channel) => {
           open_channels.set(device_id, channel);
+          // Every peer is registered in rtc_negotiation.mts (via
+          // register_existing_peers or register_new_peer) before its
+          // channel can open, so this lookup should always hit.
+          connected_peer_names.set(
+            device_id,
+            get_peer_state(device_id)?.device_name ?? device_id,
+          );
           refresh_peer_select();
           ui.log(`data channel OPEN with ${device_id}`);
 
@@ -188,11 +229,11 @@ async function get_or_create_peer_connection(
         },
 
         on_data_channel_close: () => {
-          open_channels.delete(device_id);
-          file_receivers.get(device_id)?.detach();
-          file_receivers.delete(device_id);
-          refresh_peer_select();
           ui.log(`data channel CLOSED with ${device_id}`);
+          // The channel is the only thing this connection exists for, so
+          // once it's closed (typically the other device closed its tab or
+          // its connection) the whole peer connection goes with it.
+          close_peer(device_id);
         },
       },
       rtc_config,
@@ -281,10 +322,14 @@ function connect_to_signaling(url: string): void {
       }
     },
     on_close: (event) => {
-      ui.set_status("Disconnected");
+      // Matches index.html's initial text, so the connect tab looks the
+      // same as it did before the first connect.
+      ui.set_status("Not connected");
       ui.set_connect_state(false);
       ui.set_room_status("disconnected");
-      reset_room_state();
+      // Resets the connect tab only - open peer connections, and any
+      // transfer running over them, carry on (see reset_signaling_state).
+      reset_signaling_state();
       ui.log("signaling CLOSE", { code: event.code, reason: event.reason });
     },
     on_socket_error: () => ui.log("signaling SOCKET ERROR"),
@@ -346,12 +391,19 @@ function connect_to_signaling(url: string): void {
     on_peer_left: (message) => {
       ui.log("peer-left", message);
       remove_peer(message);
-      peer_connections.get(message.device_id)?.close();
-      peer_connections.delete(message.device_id);
-      file_receivers.get(message.device_id)?.detach();
-      file_receivers.delete(message.device_id);
-      open_channels.delete(message.device_id);
-      refresh_peer_select();
+      // peer-left only means the peer's *signaling* connection is gone
+      // (they clicked Leave, their room expired, or their WebSocket
+      // dropped) - it says nothing about the direct connection between
+      // us. An already-open data channel is kept; it'll close by itself
+      // if the peer really went away. A connection still mid-handshake
+      // can't finish without signaling, so that one is closed.
+      if (open_channels.has(message.device_id)) {
+        ui.log(
+          `${message.device_name} left signaling - direct connection kept`,
+        );
+        return;
+      }
+      close_peer(message.device_id);
     },
 
     on_room_expired: (message) => {
@@ -360,10 +412,11 @@ function connect_to_signaling(url: string): void {
       // credential fetch is a known limitation (hopdrop-signaling side) -
       // the client can't yet tell these apart. Rejects any peer connection
       // currently waiting on TURN credentials so it can bail out cleanly
-      // instead of hanging.
+      // instead of hanging. Open peer connections are kept, same as a
+      // signaling disconnect.
       ui.set_room_status("waiting");
       ui.set_status("Connected to signaling");
-      reset_room_state();
+      reset_signaling_state();
     },
 
     on_turn_credentials: (message) => {
@@ -464,7 +517,9 @@ const ui = create_room_ui({
     ui.log("sent leave");
     ui.set_room_status("waiting");
     ui.set_status("Connected to signaling");
-    reset_room_state();
+    // Leaving the room is a signaling action only - open peer connections
+    // are kept, same as a signaling disconnect.
+    reset_signaling_state();
   },
 
   on_send_file(device_id, file) {
