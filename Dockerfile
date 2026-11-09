@@ -1,7 +1,7 @@
 # --- Build stage -----------------------------------------------------
 # Has Vite, TypeScript, bootstrap, all devDependencies. Discarded after
 # this stage - none of it becomes part of the shipped image.
-FROM node:22-slim AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -37,6 +37,6 @@ RUN npm run build
 # No Node, no npm, no node_modules at all - nginx never runs any JS, it
 # just serves the files Vite already produced. This is the whole payoff
 # of doing this as one multi-stage build instead of a separate dist repo.
-FROM nginx:alpine AS runtime
+FROM nginx:1.31-alpine3.24 AS runtime
 COPY --from=builder /app/dist /usr/share/nginx/html
 
