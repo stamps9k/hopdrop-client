@@ -8,7 +8,8 @@
 		"build": "tsc --noEmit -p config/tsconfig.build.json && vite build --config config/vite.config.ts",
 		"preview": "vite preview --config config/vite.config.ts",
 		"lint": "eslint --config config/eslint.config.mjs .",
-		"prepare": "husky"
+		"prepare": "husky",
+		"audit:ci": "npx --yes audit-ci@7.1.0 --config audit-ci.jsonc"
 	},
 	"devDependencies": {
 		"@eslint/js": "^9.0.0",
@@ -17,6 +18,7 @@
 		"@types/qrcode": "^1.5.6",
 		"eslint-config-prettier": "^9.0.0",
 		"husky": "^9.1.7",
+		"lint-staged": "^17.0.4",
 		"prettier": "^3.8.3",
 		"tsx": "^4.21.0",
 		"typescript": "^5.7.0",
@@ -33,5 +35,8 @@
 		"bootstrap": "^5.3.8",
 		"bootstrap-icons": "^1.13.1",
 		"qrcode": "^1.5.4"
+	},
+	"overrides": {
+		"minimatch@>=7.0.0 <11.0.1": "^11.0.5"
 	}
 }
