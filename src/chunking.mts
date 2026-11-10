@@ -29,7 +29,11 @@ export function split_into_chunks(
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const chunks: FileChunk[] = [];
 
-  for (let offset = 0, sequence_number = 0; offset < bytes.length; offset += chunk_size_bytes, sequence_number += 1) {
+  for (
+    let offset = 0, sequence_number = 0;
+    offset < bytes.length;
+    offset += chunk_size_bytes, sequence_number += 1
+  ) {
     chunks.push({
       sequence_number,
       data: bytes.slice(offset, offset + chunk_size_bytes),
@@ -73,7 +77,10 @@ export function create_chunk_buffer(total_chunks: number): ChunkBuffer {
 // buffer, since RTCDataChannel is ordered/reliable by default and true
 // duplicates shouldn't occur - but a defensive overwrite is cheap insurance.
 export function add_chunk(buffer: ChunkBuffer, chunk: FileChunk): void {
-  if (chunk.sequence_number < 0 || chunk.sequence_number >= buffer.total_chunks) {
+  if (
+    chunk.sequence_number < 0 ||
+    chunk.sequence_number >= buffer.total_chunks
+  ) {
     throw new Error(
       `chunk sequence_number ${chunk.sequence_number} out of range for total_chunks ${buffer.total_chunks}`,
     );
@@ -101,7 +108,9 @@ export function missing_sequence_numbers(buffer: ChunkBuffer): number[] {
 export function reassemble(buffer: ChunkBuffer): Uint8Array {
   if (!is_complete(buffer)) {
     const missing = missing_sequence_numbers(buffer);
-    throw new Error(`cannot reassemble: missing chunk(s) ${missing.join(", ")}`);
+    throw new Error(
+      `cannot reassemble: missing chunk(s) ${missing.join(", ")}`,
+    );
   }
 
   let total_length = 0;

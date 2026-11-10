@@ -130,12 +130,16 @@ describe("ChunkBuffer - add_chunk / is_complete / missing_sequence_numbers", () 
 
   test("throws when sequence_number is negative", () => {
     const buffer = create_chunk_buffer(2);
-    assert.throws(() => add_chunk(buffer, { sequence_number: -1, data: make_bytes(1) }));
+    assert.throws(() =>
+      add_chunk(buffer, { sequence_number: -1, data: make_bytes(1) }),
+    );
   });
 
   test("throws when sequence_number is >= total_chunks", () => {
     const buffer = create_chunk_buffer(2);
-    assert.throws(() => add_chunk(buffer, { sequence_number: 2, data: make_bytes(1) }));
+    assert.throws(() =>
+      add_chunk(buffer, { sequence_number: 2, data: make_bytes(1) }),
+    );
   });
 });
 
