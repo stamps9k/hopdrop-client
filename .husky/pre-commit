@@ -1,5 +1,8 @@
 npx lint-staged
 
+# Run the test suite (checks the working tree, not just the staged files).
+npm test --silent
+
 # Security audit on dependency changes (kept last: it exits early when no
 # dependency files are staged).
 # Runs audit-ci against the *staged* package.json, package-lock.json and
