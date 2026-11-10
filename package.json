@@ -2,6 +2,7 @@
   "name": "hopdrop-client",
   "private": true,
   "type": "module",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "test": "node --import tsx --test test/**/*.test.mts",
     "dev": "vite --config config/vite.config.ts",
