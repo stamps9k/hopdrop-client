@@ -8,6 +8,7 @@ import {
   create_signaling_socket,
   type SignalingSocket,
 } from "./signaling_socket.mjs";
+import type { RtcSignalType } from "./signaling_protocol.mjs";
 import {
   register_existing_peers,
   register_new_peer,
@@ -32,9 +33,14 @@ import { send_file } from "./file_sender.mjs";
 import { attach_file_receiver, type FileReceiver } from "./file_receiver.mjs";
 import {
   build_join_url,
-  parse_room_code_from_url,
-  parse_is_turn_from_url,
+  choose_room_key_source,
+  is_same_signaling_url,
+  parse_join_url,
+  strip_join_fragment,
+  type JoinLink,
 } from "./qr_join.mjs";
+import { generate_room_key, import_room_key } from "./signal_crypto.mjs";
+import { create_signal_channel } from "./signal_channel.mjs";
 import { create_room_ui, type PeerOption } from "./room_ui.mjs";
 
 // Remembers the chosen device name across visits in this browser, so
@@ -63,6 +69,35 @@ const file_receivers = new Map<string, FileReceiver>();
 // both. Without this copy, the send tab's peer list would lose its names
 // the moment signaling dropped.
 const connected_peer_names = new Map<string, string>();
+// Whether each open peer connection was negotiated over encrypted
+// signaling (true) or plaintext (false - one side joined by typed room
+// code). Captured at channel open for the same reason as
+// connected_peer_names: the signal channel's modes are signaling-scoped.
+const connected_peer_verified = new Map<string, boolean>();
+
+// The room's signaling encryption key (see signal_crypto.mts), both forms:
+// `encoded` goes into join links, `key` does the work. null means this
+// device joined by typed room code and signals in plaintext.
+interface RoomKey {
+  encoded: string;
+  key: CryptoKey;
+}
+// Chosen when a join is sent, promoted to active_room_key once the server
+// confirms the join - so a rejected join (e.g. a taken device name) can't
+// leave a key from the wrong room active.
+let pending_room_key: RoomKey | null = null;
+let active_room_key: RoomKey | null = null;
+// The URL this device most recently connected to - written into join
+// links whenever it isn't the build's default.
+let connected_signaling_url: string | null = null;
+// Join details read from a scanned QR / shared link's fragment, if the
+// page was opened with one. The room key is only used if the room code
+// actually joined matches the link's - see on_join.
+const join_link: JoinLink | undefined = parse_join_url(window.location.href);
+// Cleared once this device has joined a room, so the link's room code is
+// only re-filled on the first connection after opening it - not on every
+// later reconnect.
+let join_link_unused = join_link !== undefined;
 
 // Set only when a device name is already remembered from a previous visit
 // AND the page was opened via a scanned QR / shared join link - in that
@@ -76,6 +111,15 @@ const connected_peer_names = new Map<string, string>();
 // device_name itself - trigger_join() reads current form state directly,
 // so this is just a "should we auto-trigger" flag.
 let pending_auto_join = false;
+// Set instead of pending_auto_join when a join link is opened with no
+// remembered device name: once connected, the focused join modal opens to
+// ask for one (see room_ui.mts's show_join_guide).
+let pending_join_guide = false;
+// Set when this device joins a room from a link - the first open data
+// channel then switches to the Send tab, since sending is what the person
+// scanning came to do. Creators and typed-code joiners stay on Connect,
+// where the QR code is.
+let switch_to_send_tab_on_connect = false;
 
 // Fully tears down one peer: closes its RTCPeerConnection (and with it the
 // data channel), detaches its file receiver, and forgets it everywhere.
@@ -87,6 +131,7 @@ function close_peer(device_id: string): void {
   peer_connections.delete(device_id);
   open_channels.delete(device_id);
   connected_peer_names.delete(device_id);
+  connected_peer_verified.delete(device_id);
   file_receivers.get(device_id)?.detach();
   file_receivers.delete(device_id);
   pc?.close();
@@ -114,6 +159,9 @@ function reset_signaling_state(): void {
   reset_turn_state();
   clear_all_negotiation_state();
   pending_peer_connections.clear();
+  signals.reset();
+  active_room_key = null;
+  pending_room_key = null;
   for (const device_id of [...peer_connections.keys()]) {
     if (!open_channels.has(device_id)) {
       close_peer(device_id);
@@ -130,6 +178,7 @@ function refresh_peer_select(): void {
     // channel opened, which shouldn't happen in practice - see
     // on_data_channel_open.
     device_name: connected_peer_names.get(device_id) ?? device_id,
+    verified: connected_peer_verified.get(device_id) ?? false,
   }));
   ui.set_peer_options(peers);
 }
@@ -169,7 +218,7 @@ async function get_or_create_peer_connection(
       device_id,
       {
         on_local_ice_candidate: (candidate) => {
-          socket?.send_ice_candidate(device_id, candidate.toJSON());
+          signals.send("ice-candidate", device_id, candidate.toJSON());
         },
 
         on_connection_state_change: (state) => {
@@ -193,8 +242,19 @@ async function get_or_create_peer_connection(
             device_id,
             get_peer_state(device_id)?.device_name ?? device_id,
           );
+          if (switch_to_send_tab_on_connect) {
+            switch_to_send_tab_on_connect = false;
+            ui.show_send_tab();
+          }
+          const verified = signals.get_mode(device_id) === "encrypted";
+          connected_peer_verified.set(device_id, verified);
           refresh_peer_select();
-          ui.log(`data channel OPEN with ${device_id}`);
+          ui.log(
+            `data channel OPEN with ${device_id}`,
+            verified
+              ? "verified (encrypted signaling)"
+              : "UNVERIFIED (unencrypted signaling - a device joined by typed room code)",
+          );
 
           const receiver = attach_file_receiver(channel, {
             on_start: (info) => {
@@ -299,16 +359,104 @@ async function initiate_offer_if_caller(device_id: string): Promise<void> {
   }
   const offer = await pc.create_and_send_offer();
   mark_offer_sent(device_id);
-  socket?.send_offer(device_id, offer);
+  // Must be queued synchronously right here, before yielding: the local
+  // ICE candidates this offer triggers are queued as they fire, and the
+  // queue is what guarantees the offer goes out ahead of them.
+  signals.send("offer", device_id, offer);
   ui.log(`sent offer to ${device_id}`);
 }
 
+function send_raw_signal(
+  type: RtcSignalType,
+  device_id: string,
+  payload: unknown,
+): void {
+  if (socket === null) {
+    throw new Error("no signaling connection");
+  }
+  switch (type) {
+    case "offer":
+      socket.send_offer(device_id, payload);
+      break;
+    case "answer":
+      socket.send_answer(device_id, payload);
+      break;
+    case "ice-candidate":
+      socket.send_ice_candidate(device_id, payload);
+      break;
+  }
+}
+
+function peer_display_name(device_id: string): string {
+  return get_peer_state(device_id)?.device_name ?? device_id;
+}
+
+// All SDP/ICE traffic goes through this - see signal_channel.mts for the
+// encryption, ordering and downgrade rules it enforces.
+const signals = create_signal_channel({
+  send_raw: send_raw_signal,
+
+  on_tampered(device_id, detail) {
+    const peer_name = peer_display_name(device_id);
+    ui.log(`SECURITY: signaling from ${peer_name} failed verification`, detail);
+    ui.show_signaling_tamper_warning(peer_name);
+    // An already-open connection was verified when it was set up and no
+    // longer depends on signaling, so it's kept - otherwise a hostile
+    // server could kill a running transfer just by injecting junk.
+    // Anything still mid-handshake is untrustworthy and goes.
+    if (!open_channels.has(device_id)) {
+      close_peer(device_id);
+    }
+  },
+
+  on_needs_key(device_id, detail) {
+    ui.log(`cannot connect to ${peer_display_name(device_id)}`, detail);
+    if (!open_channels.has(device_id)) {
+      close_peer(device_id);
+    }
+  },
+
+  log: (label, data) => ui.log(label, data),
+});
+
+async function load_room_key(encoded: string): Promise<RoomKey> {
+  return { encoded, key: await import_room_key(encoded) };
+}
+
+function show_join_qr(room_code: string, is_turn: boolean): Promise<void> {
+  const join_url = build_join_url(
+    window.location.href,
+    {
+      room_code,
+      is_turn,
+      room_key: active_room_key?.encoded,
+      signaling_url: connected_signaling_url ?? undefined,
+    },
+    ui.get_default_signaling_url(),
+  );
+  return ui.show_join_qr_code(join_url);
+}
+
 function connect_to_signaling(url: string): void {
+  connected_signaling_url = url;
+  ui.clear_signaling_tamper_warning();
+  ui.set_third_party_signaling_url(
+    is_same_signaling_url(url, ui.get_default_signaling_url())
+      ? undefined
+      : url,
+  );
   socket = create_signaling_socket(url, {
     on_open: () => {
       ui.set_status("Connected to signaling");
       ui.set_connect_state(true);
       ui.set_room_status("waiting");
+      // set_room_status("waiting") empties the room code field (right for
+      // a Leave, wrong here) - put a scanned link's code back, or the
+      // auto-join below (or the user's own Join click) would create a new
+      // room instead of joining the one the link points at.
+      if (join_link !== undefined && join_link_unused) {
+        ui.prefill_room_code(join_link.room_code);
+      }
       ui.log("signaling OPEN");
       if (pending_auto_join) {
         pending_auto_join = false;
@@ -319,6 +467,9 @@ function connect_to_signaling(url: string): void {
         // device name, and is_turn straight from the DOM, all of which
         // were already prefilled below before this socket connected.
         ui.trigger_join();
+      } else if (pending_join_guide && join_link !== undefined) {
+        pending_join_guide = false;
+        ui.show_join_guide(join_link.room_code);
       }
     },
     on_close: (event) => {
@@ -327,6 +478,7 @@ function connect_to_signaling(url: string): void {
       ui.set_status("Not connected");
       ui.set_connect_state(false);
       ui.set_room_status("disconnected");
+      ui.set_third_party_signaling_url(undefined);
       // Resets the connect tab only - open peer connections, and any
       // transfer running over them, carry on (see reset_signaling_state).
       reset_signaling_state();
@@ -336,6 +488,11 @@ function connect_to_signaling(url: string): void {
     on_parse_error: (raw, error) => ui.log("PARSE ERROR", { raw, error }),
 
     on_room_created: (message) => {
+      ui.report_join_guide_result();
+      join_link_unused = false;
+      active_room_key = pending_room_key;
+      pending_room_key = null;
+      signals.enter_room(active_room_key?.key ?? null, message.device_id);
       reset_turn_state();
       if (message.is_turn) {
         begin_turn_request();
@@ -347,15 +504,18 @@ function connect_to_signaling(url: string): void {
       ui.log("room-created", message);
       ui.set_room_status("joined");
       ui.prefill_room_code(message.room_code);
-      const join_url = build_join_url(
-        window.location.href,
-        message.room_code,
-        message.is_turn,
-      );
-      void ui.show_join_qr_code(join_url);
+      void show_join_qr(message.room_code, message.is_turn);
     },
 
     on_room_joined: async (message) => {
+      ui.report_join_guide_result();
+      if (join_link_unused && message.room_code === join_link?.room_code) {
+        switch_to_send_tab_on_connect = true;
+      }
+      join_link_unused = false;
+      active_room_key = pending_room_key;
+      pending_room_key = null;
+      signals.enter_room(active_room_key?.key ?? null, message.device_id);
       reset_turn_state();
       if (message.is_turn) {
         begin_turn_request();
@@ -370,12 +530,7 @@ function connect_to_signaling(url: string): void {
       for (const peer of peers) {
         await initiate_offer_if_caller(peer.device_id);
       }
-      const join_url = build_join_url(
-        window.location.href,
-        message.room_code,
-        message.is_turn,
-      );
-      await ui.show_join_qr_code(join_url);
+      await show_join_qr(message.room_code, message.is_turn);
       ui.collapse_join_qr_code();
     },
 
@@ -391,6 +546,7 @@ function connect_to_signaling(url: string): void {
     on_peer_left: (message) => {
       ui.log("peer-left", message);
       remove_peer(message);
+      signals.forget_peer(message.device_id);
       // peer-left only means the peer's *signaling* connection is gone
       // (they clicked Leave, their room expired, or their WebSocket
       // dropped) - it says nothing about the direct connection between
@@ -425,50 +581,59 @@ function connect_to_signaling(url: string): void {
     },
 
     // Server-relayed SDP/ICE payloads are opaque `unknown` by design (see
-    // hopdrop-signaling's protocol) - the server never inspects them, so
-    // the client is trusting its own peer's shape here. Fine at hopdrop's
+    // hopdrop-signaling's protocol). signals.receive authenticates and
+    // decrypts them where the room is encrypted; past that, the client
+    // trusts its own peer's payload shape. Fine at hopdrop's
     // personal-use, paired-devices-you-control scope; would need
     // validation if this ever faced untrusted peers.
-    on_offer: async (message) => {
-      ui.log(`offer from ${message.from_device_id}`);
-      const pc = await try_get_or_create_peer_connection(
-        message.from_device_id,
-      );
-      if (pc === undefined) {
-        return;
-      }
-      const answer = await pc.handle_remote_offer(
-        message.payload as RTCSessionDescriptionInit,
-      );
-      socket?.send_answer(message.from_device_id, answer);
-      ui.log(`sent answer to ${message.from_device_id}`);
-    },
-
-    on_answer: async (message) => {
-      ui.log(`answer from ${message.from_device_id}`);
-      const pc = peer_connections.get(message.from_device_id);
-      if (pc === undefined) {
-        ui.log(`WARNING: answer from unknown peer ${message.from_device_id}`);
-        return;
-      }
-      await pc.handle_remote_answer(
-        message.payload as RTCSessionDescriptionInit,
-      );
-    },
-
-    on_ice_candidate: async (message) => {
-      const pc = peer_connections.get(message.from_device_id);
-      if (pc === undefined) {
-        ui.log(
-          `WARNING: ICE candidate from unknown peer ${message.from_device_id}`,
+    on_offer: (message) => {
+      const device_id = message.from_device_id;
+      ui.log(`offer from ${device_id}`);
+      signals.receive(message, async (payload) => {
+        const pc = await try_get_or_create_peer_connection(device_id);
+        if (pc === undefined) {
+          return;
+        }
+        const answer = await pc.handle_remote_offer(
+          payload as RTCSessionDescriptionInit,
         );
-        return;
-      }
-      await pc.add_remote_ice_candidate(message.payload as RTCIceCandidateInit);
+        // Queued before yielding, ahead of the ICE candidates the answer
+        // triggers - same reason as in initiate_offer_if_caller.
+        signals.send("answer", device_id, answer);
+        ui.log(`sent answer to ${device_id}`);
+      });
+    },
+
+    on_answer: (message) => {
+      const device_id = message.from_device_id;
+      ui.log(`answer from ${device_id}`);
+      signals.receive(message, async (payload) => {
+        const pc = peer_connections.get(device_id);
+        if (pc === undefined) {
+          ui.log(`WARNING: answer from unknown peer ${device_id}`);
+          return;
+        }
+        await pc.handle_remote_answer(payload as RTCSessionDescriptionInit);
+      });
+    },
+
+    on_ice_candidate: (message) => {
+      const device_id = message.from_device_id;
+      signals.receive(message, async (payload) => {
+        const pc = peer_connections.get(device_id);
+        if (pc === undefined) {
+          ui.log(`WARNING: ICE candidate from unknown peer ${device_id}`);
+          return;
+        }
+        await pc.add_remote_ice_candidate(payload as RTCIceCandidateInit);
+      });
     },
 
     on_server_error: (message) => {
       ui.log("server error", message);
+      // e.g. the chosen name is already taken in that room - reopens the
+      // join modal with the reason, if the join came from it.
+      ui.report_join_guide_result(message.message);
       // The normal way a failed TURN fetch surfaces is room-expired, not a
       // bare error (see hopdrop-signaling's close_room_due_to_turn_failure)
       // - this only catches the narrower, defensive request-turn-credentials
@@ -497,10 +662,10 @@ const ui = create_room_ui({
     ui.log("disconnecting");
   },
 
-  on_join(device_name, room_code, is_turn) {
+  async on_join(device_name, room_code, is_turn) {
     if (socket === null || socket.ready_state !== WebSocket.OPEN) {
       ui.log("still connecting to the server - try again in a moment");
-      return;
+      return false;
     }
     try {
       localStorage.setItem(DEVICE_NAME_STORAGE_KEY, device_name);
@@ -508,8 +673,42 @@ const ui = create_room_ui({
       // Storage can fail (private browsing, quota, disabled) - losing the
       // "remember my name" convenience isn't worth failing the join over.
     }
+    // Creating a room mints a fresh key, shared via the QR code/link;
+    // joining uses the opened link's key only if this is that link's room
+    // (see choose_room_key_source).
+    const key_source = choose_room_key_source(room_code, join_link);
+    let room_key: RoomKey | null = null;
+    try {
+      if (key_source.kind === "generate") {
+        room_key = await load_room_key(generate_room_key());
+      } else if (key_source.kind === "link") {
+        room_key = await load_room_key(key_source.room_key);
+      }
+    } catch (error) {
+      ui.log(
+        "could not set up the room key - join not sent",
+        error instanceof Error ? error.message : String(error),
+      );
+      return false;
+    }
+    if (socket === null || socket.ready_state !== WebSocket.OPEN) {
+      ui.log("lost the server connection - join not sent");
+      return false;
+    }
+    pending_room_key = room_key;
     socket.join(device_name, room_code, is_turn);
-    ui.log("sent join", { device_name, room_code, is_turn });
+    ui.log("sent join", {
+      device_name,
+      room_code,
+      is_turn,
+      encrypted_signaling: room_key !== null,
+    });
+    if (room_key === null) {
+      ui.log(
+        "joining by typed room code - connections in this room can't be verified against signaling server tampering. Scan the QR code or open the join link to get a verified connection.",
+      );
+    }
+    return true;
   },
 
   on_leave() {
@@ -568,11 +767,21 @@ if (remembered_device_name !== null && remembered_device_name.length > 0) {
   ui.prefill_device_name(remembered_device_name);
 }
 
-const room_code_from_url = parse_room_code_from_url(window.location.href);
-if (room_code_from_url !== undefined) {
-  ui.prefill_room_code(room_code_from_url);
-  const is_turn_from_url = parse_is_turn_from_url(window.location.href);
-  ui.prefill_is_turn(is_turn_from_url);
+if (join_link !== undefined) {
+  // Consumed now - clear it from the address bar so a refresh or a shared
+  // tab URL doesn't retry a room that has since expired (or pass the room
+  // key along). Non-join fragments like the "#app" anchor are left alone.
+  window.history.replaceState(
+    window.history.state,
+    "",
+    strip_join_fragment(window.location.href),
+  );
+
+  ui.prefill_room_code(join_link.room_code);
+  ui.prefill_is_turn(join_link.is_turn);
+  if (join_link.signaling_url !== undefined) {
+    ui.prefill_signaling_url(join_link.signaling_url);
+  }
 
   // Connect right away regardless of whether a device name is remembered -
   // connecting doesn't require a name, only the join message does. This
@@ -581,13 +790,43 @@ if (room_code_from_url !== undefined) {
   // press "join", which works immediately since the socket is already open.
   if (remembered_device_name !== null && remembered_device_name.length > 0) {
     pending_auto_join = true;
-    ui.log(`auto-joining room ${room_code_from_url} (from scanned link)`, {
-      is_turn: is_turn_from_url,
+    ui.log(`auto-joining room ${join_link.room_code} (from scanned link)`, {
+      is_turn: join_link.is_turn,
+      encrypted_signaling: join_link.room_key !== undefined,
     });
   } else {
+    pending_join_guide = true;
     ui.log(
-      `room ${room_code_from_url} ready to join - enter a device name and press join`,
+      `room ${join_link.room_code} ready to join - waiting for a device name`,
     );
   }
   connect_to_signaling(ui.get_signaling_url());
 }
+
+// Opening a join link while this page is already open on the same URL
+// (e.g. pasting it into the same tab) only changes the fragment, which
+// doesn't reload the page. Reloading hands it to the same startup path
+// above. In-page anchors like "#app" don't parse as join links, so the
+// "Start a transfer" button is unaffected.
+//
+// A reload would cut any open peer connections - and with them any
+// transfer in progress - so in that case it asks first.
+window.addEventListener("hashchange", () => {
+  if (parse_join_url(window.location.href) === undefined) {
+    return;
+  }
+  if (
+    open_channels.size > 0 &&
+    !window.confirm(
+      "Open this join link? Your current connections will be closed.",
+    )
+  ) {
+    window.history.replaceState(
+      window.history.state,
+      "",
+      strip_join_fragment(window.location.href),
+    );
+    return;
+  }
+  window.location.reload();
+});

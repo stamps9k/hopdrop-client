@@ -47,6 +47,29 @@
       src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
       integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
       crossorigin="anonymous"></script>
+    <style>
+      /* Join modal's Join button: a soft ring pulsing outward, shown once a
+         name has been typed (see room_ui.mts update_join_guide_pulse). */
+      @keyframes join-guide-pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(var(--bs-primary-rgb), 0.55);
+        }
+        70% {
+          box-shadow: 0 0 0 0.75rem rgba(var(--bs-primary-rgb), 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(var(--bs-primary-rgb), 0);
+        }
+      }
+      .join-guide-pulse {
+        animation: join-guide-pulse 1.6s ease-out infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .join-guide-pulse {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body class="d-flex flex-column min-vh-100 text-center">
     <nav class="navbar navbar-expand-md border-bottom bg-body">
@@ -274,6 +297,33 @@
                 id="connect-status"
                 class="bi bi-x-circle-fill text-danger fs-5"></i>
             </div>
+            <div
+              id="signaling-notice"
+              class="alert alert-warning small text-start py-2 mb-3 d-none"
+              role="status">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>
+              <strong
+                >Third-party signaling server:
+                <span id="signaling-notice-host" class="font-monospace"></span
+              ></strong>
+              <br />
+              This isn't the default Hopdrop server. It can see which devices
+              are in your room, their IP addresses and when they connect, and it
+              chooses your TURN relay. It can't read your files, or tamper with
+              connections between devices that joined by QR code or link.
+            </div>
+            <div
+              id="signaling-tamper"
+              class="alert alert-danger small text-start py-2 mb-3 d-none"
+              role="alert">
+              <i class="bi bi-shield-exclamation me-1"></i>
+              <strong
+                >Connection with
+                <span id="signaling-tamper-peer"></span> blocked.</strong
+              >
+              Its signaling messages failed verification &mdash; the signaling
+              server may have tampered with them.
+            </div>
             <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
               <input
                 id="device-name"
@@ -495,6 +545,60 @@
 
     <div
       class="modal fade"
+      id="join-guide-modal"
+      tabindex="-1"
+      aria-labelledby="join-guide-title"
+      aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <form id="join-guide-form" class="modal-content" novalidate>
+          <div class="modal-header">
+            <h5 class="modal-title" id="join-guide-title">
+              Join room
+              <span id="join-guide-room" class="font-monospace"></span>
+            </h5>
+            <button
+              type="button"
+              class="btn-close"
+              data-bs-dismiss="modal"
+              aria-label="Close"></button>
+          </div>
+          <div class="modal-body text-start">
+            <p class="text-body-secondary mb-3">
+              Give this device a name so the other device can tell it's you.
+            </p>
+            <div
+              id="join-guide-third-party"
+              class="alert alert-warning small py-2 mb-3 d-none">
+              <i class="bi bi-exclamation-triangle-fill me-1"></i>
+              This link uses a third-party signaling server:
+              <span id="join-guide-host" class="font-monospace"></span>
+            </div>
+            <label for="join-guide-name" class="form-label small"
+              >Device name</label
+            >
+            <input
+              id="join-guide-name"
+              class="form-control"
+              maxlength="40"
+              placeholder="e.g. My phone"
+              autocomplete="off"
+              enterkeyhint="go" />
+            <div id="join-guide-error" class="invalid-feedback"></div>
+          </div>
+          <div class="modal-footer">
+            <button
+              id="join-guide-submit"
+              type="submit"
+              class="btn btn-primary w-100">
+              Join
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div
+      class="modal fade"
       id="turn-warning-modal"
       tabindex="-1"
       data-bs-backdrop="static"
@@ -517,6 +621,14 @@
               relays the encrypted traffic but can't read its contents &mdash;
               though it can see connection metadata, such as your devices' IP
               addresses and how much data was transferred.
+            </p>
+            <p id="turn-warning-third-party" class="d-none">
+              You're connected to a third-party signaling server (<span
+                id="turn-warning-third-party-host"
+                class="font-monospace"></span
+              >). It supplies this room's relay credentials, so the relay may
+              not be Metered &mdash; it's whichever relay that server chooses,
+              and it can see the same metadata.
             </p>
           </div>
           <div class="modal-footer">

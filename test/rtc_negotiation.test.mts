@@ -19,6 +19,7 @@ describe("register_existing_peers", () => {
   test("assigns role caller with offer_sent false to each peer, carrying its name", () => {
     const states = register_existing_peers({
       type: "room-joined",
+      is_turn: false,
       room_code: "AB12",
       device_id: "me",
       device_name: "Me",
@@ -52,6 +53,7 @@ describe("register_existing_peers", () => {
   test("returns an empty array when the room was created fresh", () => {
     const states = register_existing_peers({
       type: "room-joined",
+      is_turn: false,
       room_code: "AB12",
       device_id: "me",
       device_name: "Me",
@@ -64,6 +66,7 @@ describe("register_existing_peers", () => {
   test("is idempotent - a duplicate call does not reset offer_sent", () => {
     register_existing_peers({
       type: "room-joined",
+      is_turn: false,
       room_code: "AB12",
       device_id: "me",
       device_name: "Me",
@@ -73,6 +76,7 @@ describe("register_existing_peers", () => {
 
     register_existing_peers({
       type: "room-joined",
+      is_turn: false,
       room_code: "AB12",
       device_id: "me",
       device_name: "Me",
@@ -120,6 +124,7 @@ describe("should_send_offer", () => {
   test("true for a caller that has not been offered to yet", () => {
     register_existing_peers({
       type: "room-joined",
+      is_turn: false,
       room_code: "AB12",
       device_id: "me",
       device_name: "Me",
@@ -144,6 +149,7 @@ describe("should_send_offer", () => {
   test("false after mark_offer_sent has been called", () => {
     register_existing_peers({
       type: "room-joined",
+      is_turn: false,
       room_code: "AB12",
       device_id: "me",
       device_name: "Me",
@@ -174,6 +180,7 @@ describe("remove_peer", () => {
   test("should_send_offer is false after removal even if it was a caller", () => {
     register_existing_peers({
       type: "room-joined",
+      is_turn: false,
       room_code: "AB12",
       device_id: "me",
       device_name: "Me",
@@ -198,6 +205,7 @@ describe("list_known_peers", () => {
   test("reflects a mix of caller and callee peers currently tracked", () => {
     register_existing_peers({
       type: "room-joined",
+      is_turn: false,
       room_code: "AB12",
       device_id: "me",
       device_name: "Me",
@@ -229,6 +237,7 @@ describe("clear_all_negotiation_state", () => {
   test("empties all tracked peers", () => {
     register_existing_peers({
       type: "room-joined",
+      is_turn: false,
       room_code: "AB12",
       device_id: "me",
       device_name: "Me",

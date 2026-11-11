@@ -4,7 +4,9 @@
   "type": "module",
   "license": "GPL-3.0-or-later",
   "scripts": {
-    "test": "node --import tsx --test test/**/*.test.mts",
+    "typecheck": "tsc --noEmit -p config/tsconfig.dev.json",
+    "test": "npm run typecheck --silent && node --import tsx --test test/**/*.test.mts",
+    "test:e2e": "node --import tsx --test --test-concurrency=1 e2e/**/*.e2e.mts",
     "dev": "vite --config config/vite.config.ts",
     "build": "tsc --noEmit -p config/tsconfig.build.json && vite build --config config/vite.config.ts",
     "preview": "vite preview --config config/vite.config.ts",
@@ -23,6 +25,7 @@
     "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.4",
+    "playwright": "^1.63.0",
     "prettier": "^3.8.3",
     "tsx": "^4.21.0",
     "typescript": "^5.7.0",

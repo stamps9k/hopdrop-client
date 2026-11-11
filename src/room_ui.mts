@@ -10,7 +10,7 @@
 // room-code entry and scanning a QR code (the room creator's device shows
 // a QR encoding a shareable join link; scanning it with a phone's native
 // camera app opens the link, and index.mts auto-fills/auto-joins from the
-// ?room= query param - no in-app camera scanner needed). Every device must
+// link's fragment - see qr_join.mts - no in-app camera scanner needed). Every device must
 // choose a name before joining; the server enforces uniqueness per room,
 // this module just does the immediate client-side sanity check.
 //
@@ -20,7 +20,7 @@
 // its whole lifetime); when joining an existing room, the value sent must
 // match what the room was created with or the server rejects it. A
 // scanned/shared join link can pre-check this box via prefill_is_turn -
-// index.mts reads a turn=1 query param (see qr_join.mts) and calls that
+// index.mts reads the link's turn flag (see qr_join.mts) and calls that
 // before the user ever sees the form, so a joiner doesn't have to guess
 // whether the room they're joining requires it.
 //
@@ -32,6 +32,18 @@
 // index.mts's on_join callback is unaware it happened, since from its
 // perspective the callback is just invoked later than usual (or not at
 // all) - same signature, no new wiring needed on that side.
+//
+// The warning is acknowledged per signaling server: the default server's
+// acknowledgment doesn't carry over to a third-party one, because a
+// third-party server supplies its own TURN credentials and so chooses the
+// relay - the modal gains a paragraph saying so for that case.
+//
+// show_join_guide() is the friendlier front door for the same flow when a
+// join link is opened on a device with no remembered name: a focused
+// modal asking only for a device name, which then fills in the form and
+// runs the normal join. If the server rejects the join (e.g. the name is
+// already taken in that room), index.mts reports it back through
+// report_join_guide_result and the modal reopens with the error.
 //
 // trigger_join() exists so index.mts's auto-join path (opening a scanned
 // link with a device name already remembered) goes through this exact
@@ -64,16 +76,22 @@ const TURN_WARNING_STORAGE_KEY = "hopdrop_turn_warning_acknowledged";
 export interface PeerOption {
   device_id: string;
   device_name: string;
+  // false when the connection was negotiated over unencrypted signaling
+  // (one side joined by typed room code), so it can't be ruled out that
+  // the signaling server tampered with it.
+  verified: boolean;
 }
 
 export interface RoomUiCallbacks {
   on_connect: (signaling_url: string) => void;
   on_disconnect: () => void;
+  // Resolves true once the join message has actually been sent, false if
+  // it was abandoned (not connected, room key setup failed).
   on_join: (
     device_name: string,
     room_code: string | undefined,
     is_turn: boolean,
-  ) => void;
+  ) => Promise<boolean>;
   on_leave: () => void;
   on_send_file: (target_device_id: string, file: File) => void;
 }
@@ -103,6 +121,17 @@ export interface RoomUi {
     hash_verified: boolean,
   ): void;
   get_signaling_url(): string;
+  // The build's default signaling URL - the ws-url input's original value
+  // attribute (Vite substitutes VITE_SIGNALING_URL into it), unaffected by
+  // anything the user has typed since.
+  get_default_signaling_url(): string;
+  prefill_signaling_url(url: string): void;
+  // undefined: connected to the default server (or not connected) - no
+  // notice. Otherwise shows a standing, non-blocking warning naming the
+  // third-party server and what it can see.
+  set_third_party_signaling_url(url: string | undefined): void;
+  show_signaling_tamper_warning(peer_name: string): void;
+  clear_signaling_tamper_warning(): void;
   prefill_room_code(room_code: string): void;
   prefill_is_turn(is_turn: boolean): void;
   get_device_name(): string;
@@ -117,6 +146,15 @@ export interface RoomUi {
   // parameters of its own, specifically so there's only one join code
   // path to keep correct.
   trigger_join(): void;
+  // Opens the focused join modal for a scanned/shared link (see the file
+  // header). Only the device name is asked for - room code, TURN flag and
+  // server are already prefilled from the link.
+  show_join_guide(room_code: string): void;
+  // Outcome of the join the guide sent: ok closes the loop; an error
+  // message reopens the guide showing it. Ignored unless a guided join is
+  // actually in flight, so unrelated server errors never pop it open.
+  report_join_guide_result(error_message?: string): void;
+  show_send_tab(): void;
 }
 
 function require_element<T extends HTMLElement>(id: string): T {
@@ -127,9 +165,34 @@ function require_element<T extends HTMLElement>(id: string): T {
   return el as T;
 }
 
-function has_acknowledged_turn_warning(): boolean {
+// The default server keeps the original key, so existing acknowledgments
+// still count; each third-party server gets its own.
+function turn_warning_storage_key(
+  third_party_host: string | undefined,
+): string {
+  return third_party_host === undefined
+    ? TURN_WARNING_STORAGE_KEY
+    : `${TURN_WARNING_STORAGE_KEY}:${third_party_host}`;
+}
+
+// Returns an error message, or null if the name is acceptable.
+function validate_device_name(device_name: string): string | null {
+  if (device_name.length === 0) {
+    return "enter a device name first";
+  }
+  if (device_name.length > MAX_DEVICE_NAME_LENGTH) {
+    return `device name must be ${MAX_DEVICE_NAME_LENGTH} characters or fewer`;
+  }
+  return null;
+}
+
+function has_acknowledged_turn_warning(
+  third_party_host: string | undefined,
+): boolean {
   try {
-    return localStorage.getItem(TURN_WARNING_STORAGE_KEY) !== null;
+    return (
+      localStorage.getItem(turn_warning_storage_key(third_party_host)) !== null
+    );
   } catch {
     // Storage access can throw (private browsing, disabled entirely) - if
     // we can't remember a prior acknowledgment, show the warning every
@@ -139,9 +202,11 @@ function has_acknowledged_turn_warning(): boolean {
   }
 }
 
-function mark_turn_warning_acknowledged(): void {
+function mark_turn_warning_acknowledged(
+  third_party_host: string | undefined,
+): void {
   try {
-    localStorage.setItem(TURN_WARNING_STORAGE_KEY, "1");
+    localStorage.setItem(turn_warning_storage_key(third_party_host), "1");
   } catch {
     // Losing the "don't ask again" convenience isn't worth failing the
     // join over - the warning will just show again next time.
@@ -200,6 +265,45 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const turn_warning_reject_button = require_element<HTMLButtonElement>(
     "turn-warning-reject",
   );
+  const turn_warning_third_party_el = require_element<HTMLElement>(
+    "turn-warning-third-party",
+  );
+  const turn_warning_third_party_host_el = require_element<HTMLElement>(
+    "turn-warning-third-party-host",
+  );
+  const signaling_notice_el = require_element<HTMLElement>("signaling-notice");
+  const signaling_notice_host_el = require_element<HTMLElement>(
+    "signaling-notice-host",
+  );
+  const signaling_tamper_el = require_element<HTMLElement>("signaling-tamper");
+  const signaling_tamper_peer_el = require_element<HTMLElement>(
+    "signaling-tamper-peer",
+  );
+  const join_guide_modal_el = require_element<HTMLElement>("join-guide-modal");
+  const join_guide_modal = new window.bootstrap.Modal(join_guide_modal_el);
+  const join_guide_form = require_element<HTMLFormElement>("join-guide-form");
+  const join_guide_room_el = require_element<HTMLElement>("join-guide-room");
+  const join_guide_name_input =
+    require_element<HTMLInputElement>("join-guide-name");
+  const join_guide_error_el = require_element<HTMLElement>("join-guide-error");
+  const join_guide_submit_button =
+    require_element<HTMLButtonElement>("join-guide-submit");
+  const join_guide_third_party_el = require_element<HTMLElement>(
+    "join-guide-third-party",
+  );
+  const join_guide_host_el = require_element<HTMLElement>("join-guide-host");
+  const send_tab_el = require_element<HTMLElement>("send-tab");
+  // True from the guide's submit until index.mts reports how the join went.
+  let join_guide_in_flight = false;
+  // Set on submit, so the modal's "hidden" handler knows to continue into
+  // the join rather than treat the close as a dismissal.
+  let join_guide_submitted = false;
+  // Bootstrap ignores hide() while a modal is still fading in, so a fast
+  // submit (or autofill + Enter) during that window is held until "shown".
+  let join_guide_fully_shown = false;
+  // Host of the third-party signaling server currently in use, or
+  // undefined for the default one - see set_third_party_signaling_url.
+  let third_party_signaling_host: string | undefined;
 
   // Animates the QR-code <details> open/closed instead of letting the
   // browser snap it instantly, which was disorienting - the surrounding
@@ -317,6 +421,12 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       }
       turn_warning_accept_button.addEventListener("click", on_accept);
       turn_warning_reject_button.addEventListener("click", on_reject);
+      turn_warning_third_party_host_el.textContent =
+        third_party_signaling_host ?? "";
+      turn_warning_third_party_el.classList.toggle(
+        "d-none",
+        third_party_signaling_host === undefined,
+      );
       turn_warning_modal.show();
     });
   }
@@ -325,33 +435,111 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   // must go through the identical validation/consent flow, reading
   // straight from the DOM inputs rather than accepting parameters, so
   // there's exactly one place this logic exists.
-  async function attempt_join(): Promise<void> {
+  //
+  // Resolves true if the join message was sent, false if validation, the
+  // TURN consent, or on_join itself stopped it.
+  async function attempt_join(): Promise<boolean> {
     const device_name = device_name_input.value.trim();
-    if (device_name.length === 0) {
-      ui_log("enter a device name first");
-      return;
-    }
-    if (device_name.length > MAX_DEVICE_NAME_LENGTH) {
-      ui_log(
-        `device name must be ${MAX_DEVICE_NAME_LENGTH} characters or fewer`,
-      );
-      return;
+    const name_error = validate_device_name(device_name);
+    if (name_error !== null) {
+      ui_log(name_error);
+      return false;
     }
     const room_code = room_code_input.value.trim() || undefined;
     const is_turn = use_turn_checkbox.checked;
 
-    if (is_turn && !has_acknowledged_turn_warning()) {
+    // Captured before the modal, so the acknowledgment is recorded against
+    // the server the user was actually shown.
+    const host = third_party_signaling_host;
+    if (is_turn && !has_acknowledged_turn_warning(host)) {
       const accepted = await show_turn_warning_modal();
       if (!accepted) {
         ui_log("TURN relay declined - join not sent");
-        return;
+        return false;
       }
-      mark_turn_warning_acknowledged();
+      mark_turn_warning_acknowledged(host);
       ui_log("TURN relay use acknowledged");
     }
 
-    callbacks.on_join(device_name, room_code, is_turn);
+    return callbacks.on_join(device_name, room_code, is_turn);
   }
+
+  function set_join_guide_error(message: string | null): void {
+    join_guide_error_el.textContent = message ?? "";
+    join_guide_name_input.classList.toggle("is-invalid", message !== null);
+  }
+
+  // The pulse only starts once there's a name to submit, so the eye goes
+  // to the empty field first and the button second.
+  function update_join_guide_pulse(): void {
+    join_guide_submit_button.classList.toggle(
+      "join-guide-pulse",
+      join_guide_name_input.value.trim().length > 0,
+    );
+  }
+
+  function open_join_guide(room_code: string): void {
+    join_guide_room_el.textContent = room_code;
+    join_guide_name_input.value = device_name_input.value.trim();
+    join_guide_host_el.textContent = third_party_signaling_host ?? "";
+    join_guide_third_party_el.classList.toggle(
+      "d-none",
+      third_party_signaling_host === undefined,
+    );
+    set_join_guide_error(null);
+    update_join_guide_pulse();
+    join_guide_modal.show();
+  }
+
+  join_guide_name_input.addEventListener("input", () => {
+    set_join_guide_error(null);
+    update_join_guide_pulse();
+  });
+
+  join_guide_form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const device_name = join_guide_name_input.value.trim();
+    const name_error = validate_device_name(device_name);
+    if (name_error !== null) {
+      set_join_guide_error(name_error);
+      join_guide_name_input.focus();
+      return;
+    }
+    device_name_input.value = device_name;
+    join_guide_submitted = true;
+    if (join_guide_fully_shown) {
+      join_guide_modal.hide();
+    }
+  });
+
+  join_guide_modal_el.addEventListener("shown.bs.modal", () => {
+    join_guide_fully_shown = true;
+    if (join_guide_submitted) {
+      join_guide_modal.hide();
+      return;
+    }
+    join_guide_name_input.focus();
+    join_guide_name_input.select();
+  });
+
+  // Continues into the join only once the modal has fully closed - the
+  // TURN consent modal may open next, and Bootstrap doesn't handle one
+  // modal opening while another is still animating shut.
+  join_guide_modal_el.addEventListener("hidden.bs.modal", () => {
+    join_guide_fully_shown = false;
+    if (!join_guide_submitted) {
+      // Dismissed - the form is still prefilled, so the user can carry on
+      // from the Connect tab by hand.
+      return;
+    }
+    join_guide_submitted = false;
+    join_guide_in_flight = true;
+    void attempt_join().then((sent) => {
+      if (!sent) {
+        join_guide_in_flight = false;
+      }
+    });
+  });
 
   let is_connected = false;
 
@@ -491,7 +679,13 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       for (const peer of peers) {
         const opt = document.createElement("option");
         opt.value = peer.device_id;
-        opt.textContent = peer.device_name;
+        opt.textContent = peer.verified
+          ? peer.device_name
+          : `${peer.device_name} (unverified)`;
+        if (!peer.verified) {
+          opt.title =
+            "Connected using a typed room code, so the signaling server could have tampered with this connection. Join via the QR code or link for a verified one.";
+        }
         peer_select.appendChild(opt);
       }
     },
@@ -532,6 +726,41 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       return ws_url_input.value;
     },
 
+    get_default_signaling_url() {
+      return ws_url_input.defaultValue;
+    },
+
+    prefill_signaling_url(url) {
+      ws_url_input.value = url;
+    },
+
+    set_third_party_signaling_url(url) {
+      if (url === undefined) {
+        third_party_signaling_host = undefined;
+        signaling_notice_el.classList.add("d-none");
+        return;
+      }
+      let host: string;
+      try {
+        host = new URL(url).host;
+      } catch {
+        host = url;
+      }
+      third_party_signaling_host = host;
+      signaling_notice_host_el.textContent = host;
+      signaling_notice_el.classList.remove("d-none");
+    },
+
+    show_signaling_tamper_warning(peer_name) {
+      signaling_tamper_peer_el.textContent = peer_name;
+      signaling_tamper_el.classList.remove("d-none");
+    },
+
+    clear_signaling_tamper_warning() {
+      signaling_tamper_peer_el.textContent = "";
+      signaling_tamper_el.classList.add("d-none");
+    },
+
     prefill_room_code(room_code) {
       room_code_input.value = room_code;
     },
@@ -568,6 +797,24 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
 
     trigger_join() {
       void attempt_join();
+    },
+
+    show_join_guide: open_join_guide,
+
+    report_join_guide_result(error_message) {
+      if (!join_guide_in_flight) {
+        return;
+      }
+      join_guide_in_flight = false;
+      if (error_message === undefined) {
+        return;
+      }
+      open_join_guide(room_code_input.value.trim());
+      set_join_guide_error(error_message);
+    },
+
+    show_send_tab() {
+      window.bootstrap.Tab.getOrCreateInstance(send_tab_el).show();
     },
   };
 }

@@ -2,159 +2,312 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   build_join_url,
-  parse_room_code_from_url,
-  parse_is_turn_from_url,
+  choose_room_key_source,
+  is_same_signaling_url,
+  is_valid_room_code,
+  normalize_signaling_url,
+  parse_join_url,
+  strip_join_fragment,
+  type JoinLink,
 } from "../src/qr_join.mjs";
 
-describe("build_join_url", () => {
-  test("appends the room code as a query param on the given URL", () => {
-    const url = build_join_url("https://hopdrop.example/", "AB12CD34", false);
-    assert.equal(url, "https://hopdrop.example/?room=AB12CD34");
+const DEFAULT_URL = "wss://hdws.stampatron.com";
+const PAGE = "https://hopdrop.example/";
+// A canonical 22-character base64url encoding of 16 bytes.
+const KEY = "Xq3vN8kLp2RmT7wYc9ZbFg";
+
+function link(overrides: Partial<JoinLink> = {}): JoinLink {
+  return {
+    room_code: "ABC234",
+    is_turn: false,
+    room_key: KEY,
+    signaling_url: undefined,
+    ...overrides,
+  };
+}
+
+describe("is_valid_room_code", () => {
+  test("accepts a 6-character code from the room code alphabet", () => {
+    assert.equal(is_valid_room_code("ABC234"), true);
   });
 
-  test("preserves a non-root path", () => {
-    const url = build_join_url(
-      "https://hopdrop.example/app/",
-      "AB12CD34",
-      false,
-    );
-    assert.equal(url, "https://hopdrop.example/app/?room=AB12CD34");
+  test("rejects the wrong length", () => {
+    assert.equal(is_valid_room_code("ABC23"), false);
+    assert.equal(is_valid_room_code("ABC2345"), false);
   });
 
-  test("preserves a non-default port", () => {
-    const url = build_join_url("http://localhost:3001/", "AB12CD34", false);
-    assert.equal(url, "http://localhost:3001/?room=AB12CD34");
-  });
-
-  test("discards existing query params rather than merging them", () => {
-    const url = build_join_url(
-      "https://hopdrop.example/?room=OLDCODE&foo=bar",
-      "NEWCODE",
-      false,
-    );
-    assert.equal(url, "https://hopdrop.example/?room=NEWCODE");
-  });
-
-  test("discards an existing fragment", () => {
-    const url = build_join_url(
-      "https://hopdrop.example/#some-anchor",
-      "AB12CD34",
-      false,
-    );
-    assert.equal(url, "https://hopdrop.example/?room=AB12CD34");
-  });
-
-  test("URL-encodes a room code containing special characters", () => {
-    const url = build_join_url("https://hopdrop.example/", "AB 12+CD", false);
-    assert.equal(url, "https://hopdrop.example/?room=AB+12%2BCD");
-  });
-
-  describe("is_turn", () => {
-    test("omits the turn param entirely when is_turn is false", () => {
-      const url = build_join_url("https://hopdrop.example/", "AB12CD34", false);
-      assert.equal(new URL(url).searchParams.has("turn"), false);
-    });
-
-    test("appends turn=1 when is_turn is true", () => {
-      const url = build_join_url("https://hopdrop.example/", "AB12CD34", true);
-      assert.equal(url, "https://hopdrop.example/?room=AB12CD34&turn=1");
-    });
-
-    test("discards an existing turn param rather than merging it", () => {
-      const url = build_join_url(
-        "https://hopdrop.example/?room=OLDCODE&turn=1",
-        "NEWCODE",
-        false,
+  // Pins the alphabet against hopdrop-signaling's src/room_code.mts
+  // (CODE_ALPHABET). If this needs changing, change the server too.
+  test("accepts exactly the shared room code alphabet, nothing else", () => {
+    const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+    for (let code_point = 0; code_point < 128; code_point++) {
+      const char = String.fromCharCode(code_point);
+      assert.equal(
+        is_valid_room_code(`ABC23${char}`),
+        alphabet.includes(char),
+        `character code ${code_point}`,
       );
-      assert.equal(url, "https://hopdrop.example/?room=NEWCODE");
-      assert.equal(new URL(url).searchParams.has("turn"), false);
+    }
+  });
+
+  test("rejects ambiguous and lowercase characters", () => {
+    for (const code of ["ABC230", "ABC23O", "ABC231", "ABC23I", "ABC23L"]) {
+      assert.equal(is_valid_room_code(code), false, code);
+    }
+    assert.equal(is_valid_room_code("abc234"), false);
+  });
+});
+
+describe("normalize_signaling_url", () => {
+  test("accepts ws and wss URLs", () => {
+    assert.equal(
+      normalize_signaling_url("wss://a.example"),
+      "wss://a.example/",
+    );
+    assert.equal(
+      normalize_signaling_url("ws://localhost:3000"),
+      "ws://localhost:3000/",
+    );
+  });
+
+  test("rejects other schemes, credentials, queries and fragments", () => {
+    for (const raw of [
+      "https://a.example",
+      "wss://user:pw@a.example",
+      "wss://a.example/?x=1",
+      "wss://a.example/#x",
+      "not a url",
+    ]) {
+      assert.equal(normalize_signaling_url(raw), undefined, raw);
+    }
+  });
+});
+
+describe("is_same_signaling_url", () => {
+  test("ignores a trailing slash and host casing", () => {
+    assert.equal(
+      is_same_signaling_url("wss://HDWS.stampatron.com/", DEFAULT_URL),
+      true,
+    );
+  });
+
+  test("an unparseable default matches nothing", () => {
+    assert.equal(
+      is_same_signaling_url("%VITE_SIGNALING_URL%", "%VITE_SIGNALING_URL%"),
+      false,
+    );
+  });
+});
+
+describe("build_join_url", () => {
+  test("encodes room code and key in the fragment", () => {
+    assert.equal(
+      build_join_url(PAGE, link(), DEFAULT_URL),
+      `https://hopdrop.example/#ABC234.${KEY}`,
+    );
+  });
+
+  test("adds the turn flag between code and key", () => {
+    assert.equal(
+      build_join_url(PAGE, link({ is_turn: true }), DEFAULT_URL),
+      `https://hopdrop.example/#ABC234.t.${KEY}`,
+    );
+  });
+
+  test("omits the key for an unencrypted room", () => {
+    assert.equal(
+      build_join_url(PAGE, link({ room_key: undefined }), DEFAULT_URL),
+      "https://hopdrop.example/#ABC234",
+    );
+  });
+
+  test("omits the server when it's the default", () => {
+    assert.equal(
+      build_join_url(
+        PAGE,
+        link({ signaling_url: "wss://hdws.stampatron.com/" }),
+        DEFAULT_URL,
+      ),
+      `https://hopdrop.example/#ABC234.${KEY}`,
+    );
+  });
+
+  test("adds a third-party wss server without its scheme", () => {
+    assert.equal(
+      build_join_url(
+        PAGE,
+        link({ is_turn: true, signaling_url: "wss://signal.example.com" }),
+        DEFAULT_URL,
+      ),
+      `https://hopdrop.example/#ABC234.t.${KEY}@signal.example.com`,
+    );
+  });
+
+  test("keeps a port and a non-root path", () => {
+    assert.equal(
+      build_join_url(
+        PAGE,
+        link({ signaling_url: "wss://signal.example.com:8443/ws" }),
+        DEFAULT_URL,
+      ),
+      `https://hopdrop.example/#ABC234.${KEY}@signal.example.com:8443/ws`,
+    );
+  });
+
+  test("keeps a non-wss scheme in full", () => {
+    assert.equal(
+      build_join_url(
+        PAGE,
+        link({ signaling_url: "ws://localhost:3000" }),
+        DEFAULT_URL,
+      ),
+      `https://hopdrop.example/#ABC234.${KEY}@ws://localhost:3000`,
+    );
+  });
+
+  test("preserves path and port, discards existing query and fragment", () => {
+    assert.equal(
+      build_join_url(
+        "http://localhost:7421/app/?room=OLD&turn=1#app",
+        link(),
+        DEFAULT_URL,
+      ),
+      `http://localhost:7421/app/#ABC234.${KEY}`,
+    );
+  });
+});
+
+describe("parse_join_url", () => {
+  test("round-trips every combination built by build_join_url", () => {
+    for (const is_turn of [false, true]) {
+      for (const room_key of [KEY, undefined]) {
+        for (const signaling_url of [
+          undefined,
+          "wss://signal.example.com/",
+          "wss://signal.example.com:8443/ws",
+          "ws://localhost:3000/",
+        ]) {
+          const original = link({ is_turn, room_key, signaling_url });
+          const parsed = parse_join_url(
+            build_join_url(PAGE, original, DEFAULT_URL),
+          );
+          assert.deepEqual(parsed, original);
+        }
+      }
+    }
+  });
+
+  test("returns undefined with no fragment or an in-page anchor", () => {
+    assert.equal(parse_join_url(PAGE), undefined);
+    assert.equal(parse_join_url(`${PAGE}#`), undefined);
+    assert.equal(parse_join_url(`${PAGE}#app`), undefined);
+  });
+
+  test("rejects an invalid room code", () => {
+    assert.equal(parse_join_url(`${PAGE}#abc234.${KEY}`), undefined);
+    assert.equal(parse_join_url(`${PAGE}#ABC2340.${KEY}`), undefined);
+  });
+
+  test("rejects a malformed or non-canonical key", () => {
+    assert.equal(parse_join_url(`${PAGE}#ABC234.short`), undefined);
+    assert.equal(parse_join_url(`${PAGE}#ABC234.${KEY}x`), undefined);
+    // Same length, but the last character carries non-zero padding bits.
+    assert.equal(
+      parse_join_url(`${PAGE}#ABC234.Xq3vN8kLp2RmT7wYc9ZbFh`),
+      undefined,
+    );
+  });
+
+  test("rejects misplaced or repeated segments", () => {
+    assert.equal(parse_join_url(`${PAGE}#ABC234.${KEY}.t`), undefined);
+    assert.equal(parse_join_url(`${PAGE}#ABC234.t.t`), undefined);
+    assert.equal(parse_join_url(`${PAGE}#ABC234.${KEY}.${KEY}`), undefined);
+    assert.equal(parse_join_url(`${PAGE}#ABC234.`), undefined);
+  });
+
+  test("rejects an empty or invalid server", () => {
+    assert.equal(parse_join_url(`${PAGE}#ABC234.${KEY}@`), undefined);
+    assert.equal(
+      parse_join_url(`${PAGE}#ABC234.${KEY}@https://a.example`),
+      undefined,
+    );
+    assert.equal(
+      parse_join_url(`${PAGE}#ABC234.${KEY}@user@a.example`),
+      undefined,
+    );
+  });
+
+  test("accepts a percent-encoded fragment", () => {
+    assert.deepEqual(
+      parse_join_url(`${PAGE}#ABC234%2Et%2E${KEY}%40signal.example.com`),
+      link({ is_turn: true, signaling_url: "wss://signal.example.com/" }),
+    );
+  });
+
+  test("rejects a malformed percent-encoding", () => {
+    assert.equal(parse_join_url(`${PAGE}#ABC234.${KEY}%E0%A4%A`), undefined);
+  });
+
+  test("round-trips IPv6, uppercase and internationalised server hosts", () => {
+    for (const [given, normalized] of [
+      ["wss://[::1]:7420", "wss://[::1]:7420/"],
+      ["ws://[2001:db8::1]:3000/ws", "ws://[2001:db8::1]:3000/ws"],
+      ["wss://Signal.EXAMPLE.com", "wss://signal.example.com/"],
+      ["wss://bücher.example", "wss://xn--bcher-kva.example/"],
+    ] as const) {
+      const parsed = parse_join_url(
+        build_join_url(PAGE, link({ signaling_url: given }), DEFAULT_URL),
+      );
+      assert.equal(parsed?.signaling_url, normalized, given);
+    }
+  });
+
+  test("ignores the query string entirely", () => {
+    assert.equal(parse_join_url(`${PAGE}?room=ABC234&turn=1`), undefined);
+  });
+});
+
+describe("strip_join_fragment", () => {
+  test("removes the fragment and keeps everything else", () => {
+    assert.equal(
+      strip_join_fragment(`http://localhost:7421/app/?x=1#ABC234.${KEY}`),
+      "http://localhost:7421/app/?x=1",
+    );
+  });
+});
+
+describe("choose_room_key_source", () => {
+  const opened = link({ room_code: "ABC234", room_key: KEY });
+
+  test("creating a room mints a new key, whatever link was opened", () => {
+    assert.deepEqual(choose_room_key_source(undefined, undefined), {
+      kind: "generate",
+    });
+    assert.deepEqual(choose_room_key_source(undefined, opened), {
+      kind: "generate",
     });
   });
-});
 
-describe("parse_room_code_from_url", () => {
-  test("extracts the room code when present", () => {
-    assert.equal(
-      parse_room_code_from_url("https://hopdrop.example/?room=AB12CD34"),
-      "AB12CD34",
+  test("joining the opened link's room uses the link's key", () => {
+    assert.deepEqual(choose_room_key_source("ABC234", opened), {
+      kind: "link",
+      room_key: KEY,
+    });
+  });
+
+  test("a typed code for any other room never picks up the link's key", () => {
+    assert.deepEqual(choose_room_key_source("XYZ789", opened), {
+      kind: "none",
+    });
+  });
+
+  test("no key when no link was opened, or the link carried none", () => {
+    assert.deepEqual(choose_room_key_source("ABC234", undefined), {
+      kind: "none",
+    });
+    assert.deepEqual(
+      choose_room_key_source("ABC234", link({ room_key: undefined })),
+      { kind: "none" },
     );
-  });
-
-  test("returns undefined when there is no room param", () => {
-    assert.equal(
-      parse_room_code_from_url("https://hopdrop.example/"),
-      undefined,
-    );
-  });
-
-  test("returns undefined for an empty room param", () => {
-    assert.equal(
-      parse_room_code_from_url("https://hopdrop.example/?room="),
-      undefined,
-    );
-  });
-
-  test("ignores unrelated query params", () => {
-    assert.equal(
-      parse_room_code_from_url("https://hopdrop.example/?foo=bar&room=XYZ99"),
-      "XYZ99",
-    );
-  });
-
-  test("round-trips with build_join_url", () => {
-    const url = build_join_url("https://hopdrop.example/", "ROUNDTRIP1", false);
-    assert.equal(parse_room_code_from_url(url), "ROUNDTRIP1");
-  });
-});
-
-describe("parse_is_turn_from_url", () => {
-  test("returns true when turn=1 is present", () => {
-    assert.equal(
-      parse_is_turn_from_url("https://hopdrop.example/?room=AB12&turn=1"),
-      true,
-    );
-  });
-
-  test("returns false when there is no turn param", () => {
-    assert.equal(
-      parse_is_turn_from_url("https://hopdrop.example/?room=AB12"),
-      false,
-    );
-  });
-
-  test("returns false for a bare URL with no query params at all", () => {
-    assert.equal(parse_is_turn_from_url("https://hopdrop.example/"), false);
-  });
-
-  test('returns false when turn is present but not exactly "1"', () => {
-    assert.equal(
-      parse_is_turn_from_url("https://hopdrop.example/?turn=true"),
-      false,
-    );
-    assert.equal(
-      parse_is_turn_from_url("https://hopdrop.example/?turn=0"),
-      false,
-    );
-    assert.equal(
-      parse_is_turn_from_url("https://hopdrop.example/?turn="),
-      false,
-    );
-  });
-
-  test("ignores unrelated query params", () => {
-    assert.equal(
-      parse_is_turn_from_url("https://hopdrop.example/?foo=bar&turn=1"),
-      true,
-    );
-  });
-
-  test("round-trips with build_join_url when is_turn is true", () => {
-    const url = build_join_url("https://hopdrop.example/", "ROUNDTRIP2", true);
-    assert.equal(parse_is_turn_from_url(url), true);
-  });
-
-  test("round-trips with build_join_url when is_turn is false", () => {
-    const url = build_join_url("https://hopdrop.example/", "ROUNDTRIP3", false);
-    assert.equal(parse_is_turn_from_url(url), false);
   });
 });
