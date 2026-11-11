@@ -1,7 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
+  build_file_complete_message,
   build_file_start_message,
+  parse_file_control_message,
   parse_file_start_message,
 } from "../src/file_transfer_protocol.mjs";
 
@@ -137,5 +139,78 @@ describe("parse_file_start_message - malformed input", () => {
       }),
     );
     assert.equal(result.ok, false);
+  });
+});
+
+describe("file-complete messages", () => {
+  test("round-trip through parse_file_control_message", () => {
+    const raw = build_file_complete_message({
+      file_name: "photo.jpg",
+      sha256_hex: SAMPLE_HASH,
+      hash_verified: false,
+    });
+    assert.deepEqual(parse_file_control_message(raw), {
+      ok: true,
+      message: {
+        type: "file-complete",
+        file_name: "photo.jpg",
+        sha256_hex: SAMPLE_HASH,
+        hash_verified: false,
+      },
+    });
+  });
+
+  test("reject a missing or non-boolean hash_verified", () => {
+    for (const hash_verified of [undefined, "true", 1, null]) {
+      const raw = JSON.stringify({
+        type: "file-complete",
+        file_name: "a",
+        sha256_hex: SAMPLE_HASH,
+        hash_verified,
+      });
+      assert.deepEqual(parse_file_control_message(raw), {
+        ok: false,
+        error: "invalid file-complete payload",
+      });
+    }
+  });
+
+  test("are not accepted as a file-start", () => {
+    const raw = build_file_complete_message({
+      file_name: "a",
+      sha256_hex: SAMPLE_HASH,
+      hash_verified: true,
+    });
+    assert.equal(parse_file_start_message(raw).ok, false);
+  });
+});
+
+describe("parse_file_control_message", () => {
+  test("parses a file-start the same as parse_file_start_message", () => {
+    const raw = build_file_start_message({
+      file_name: "a.txt",
+      file_size: 3,
+      total_chunks: 1,
+      sha256_hex: SAMPLE_HASH,
+    });
+    assert.deepEqual(
+      parse_file_control_message(raw),
+      parse_file_start_message(raw),
+    );
+  });
+
+  test("rejects unknown types and malformed JSON", () => {
+    assert.deepEqual(parse_file_control_message('{"type":"file-cancel"}'), {
+      ok: false,
+      error: "missing or invalid type field",
+    });
+    assert.deepEqual(parse_file_control_message("[1]"), {
+      ok: false,
+      error: "missing or invalid type field",
+    });
+    assert.deepEqual(parse_file_control_message("{"), {
+      ok: false,
+      error: "malformed JSON",
+    });
   });
 });

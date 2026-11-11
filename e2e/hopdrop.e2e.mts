@@ -462,34 +462,166 @@ describe("joining by typed code", () => {
 });
 
 describe("file transfer", () => {
-  test("a file sent over a verified connection arrives with its hash verified", async () => {
+  // One room for the whole sender-side flow, to stay within the signaling
+  // server's per-IP connection budget (see the top of this file).
+  test("the Send tab shows each stage, confirms delivery and reports failures", async () => {
     const creator = await new_page();
     const link = await create_room(creator, "Alpha");
     const joiner = await new_page("Bravo");
     await joiner.goto(link);
     await wait_for_peers(creator, 1);
 
-    const content = Buffer.from("hopdrop e2e ".repeat(50_000));
+    const bar_classes = (): Promise<string> =>
+      creator.$eval("#send-progress-bar", (el) => el.className);
+    const bar_width = (): Promise<string> =>
+      creator.$eval(
+        "#send-progress-bar",
+        (el) => (el as HTMLElement).style.width,
+      );
+
+    // 1. The bar is always there, empty, before anything is chosen.
     await creator.click("#send-tab");
+    assert.equal(await creator.isVisible("#send-progress"), true);
+    assert.equal(
+      await creator.textContent("#send-progress-file"),
+      "No file selected",
+    );
+
+    // 2. Choosing a file puts its name at the end of the bar.
     await creator.selectOption("#peer-select", { label: "Bravo" });
     await creator.setInputFiles("#file-input", {
-      name: "e2e.txt",
+      name: "first.txt",
       mimeType: "text/plain",
-      buffer: content,
+      buffer: Buffer.from("hopdrop e2e ".repeat(200_000)),
     });
+    assert.equal(await creator.textContent("#send-progress-file"), "first.txt");
+    assert.match(await bar_width(), /^(0%|0px|)$/);
+
+    // Record every state the bar and Send button pass through.
+    await creator.evaluate(() => {
+      const seen: string[] = [];
+      (window as unknown as { seen_states: string[] }).seen_states = seen;
+      const bar = document.querySelector("#send-progress-bar");
+      const button = document.querySelector<HTMLButtonElement>("#send-file");
+      const dropzone = document.querySelector<HTMLElement>("#dropzone");
+      const label = document.querySelector("#send-progress-label");
+      if (
+        bar === null ||
+        button === null ||
+        dropzone === null ||
+        label === null
+      )
+        return;
+      new MutationObserver(() => {
+        seen.push(
+          `${bar.className}|disabled=${button.disabled}|pointer=${getComputedStyle(dropzone).pointerEvents}|live=${label.getAttribute("aria-live")}`,
+        );
+      }).observe(bar, { attributes: true, attributeFilter: ["class"] });
+    });
+
+    // 3/4/5. Sending, then delivered - with the toast showing even though
+    // the sender has switched to another tab.
     await creator.click("#send-file");
-    await joiner.waitForFunction(
-      () =>
-        (document.querySelector("#downloads")?.textContent ?? "").includes(
-          "e2e.txt",
+    await creator.click("#connect-tab");
+    await creator.waitForSelector("#transfer-toast.show", { timeout: TIMEOUT });
+    assert.match(
+      (await creator.textContent("#transfer-toast")) ?? "",
+      /first\.txt delivered to Bravo/,
+    );
+    assert.match(
+      await creator.$eval("#transfer-toast", (el) => el.className),
+      /text-bg-success/,
+    );
+    assert.match(await bar_classes(), /bg-success/);
+    assert.doesNotMatch(await bar_classes(), /progress-bar-animated/);
+    assert.equal(await bar_width(), "100%");
+    assert.match(
+      (await creator.textContent("#send-progress-label")) ?? "",
+      /Delivered to Bravo/,
+    );
+    const seen = await creator.evaluate(
+      () => (window as unknown as { seen_states: string[] }).seen_states,
+    );
+    assert.ok(
+      seen.some((state) =>
+        /progress-bar-animated.*send-progress-active\|disabled=true\|pointer=none\|live=off$/.test(
+          state,
         ),
+      ),
+      `orange animated + locked (dropzone ignoring the pointer) while sending: ${JSON.stringify(seen)}`,
+    );
+    assert.equal(
+      await creator.$eval(
+        "#dropzone",
+        (el) => getComputedStyle(el).pointerEvents,
+      ),
+      "auto",
+      "dropzone responds to the pointer again after",
+    );
+    assert.equal(
+      await creator.isDisabled("#send-file"),
+      false,
+      "unlocked after",
+    );
+    assert.equal(
+      await creator.getAttribute("#send-progress-label", "aria-live"),
+      "polite",
+      "the status line is announced again once sending stops",
+    );
+    assert.match(
+      (await joiner.textContent("#downloads")) ?? "",
+      /first\.txt \(hash verified\)/,
+    );
+
+    // The toast fades out by itself after about 5 seconds.
+    await creator.waitForSelector("#transfer-toast", {
+      state: "hidden",
+      timeout: 8000,
+    });
+
+    // 6. A new file resets the bar to empty and swaps the name.
+    await creator.click("#send-tab");
+    await creator.setInputFiles("#file-input", {
+      name: "second.bin",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.alloc(30 * 1024 * 1024, 7),
+    });
+    assert.equal(
+      await creator.textContent("#send-progress-file"),
+      "second.bin",
+    );
+    assert.match(await bar_width(), /^(0%|0px|)$/);
+    assert.doesNotMatch(await bar_classes(), /bg-success/);
+
+    // A failure turns the bar red: the receiving device goes away mid-send.
+    await creator.click("#send-file");
+    await creator.waitForFunction(
+      () =>
+        document
+          .querySelector("#send-progress-bar")
+          ?.classList.contains("send-progress-active"),
+      null,
+      { timeout: TIMEOUT },
+    );
+    await joiner.context().close();
+    await creator.waitForFunction(
+      () =>
+        document
+          .querySelector("#send-progress-bar")
+          ?.classList.contains("bg-danger"),
       null,
       { timeout: TIMEOUT },
     );
     assert.match(
-      (await joiner.textContent("#downloads")) ?? "",
-      /e2e\.txt \(hash verified\)/,
+      (await creator.textContent("#send-progress-label")) ?? "",
+      /^Failed: /,
     );
+    await creator.waitForSelector("#transfer-toast.show", { timeout: TIMEOUT });
+    assert.match(
+      await creator.$eval("#transfer-toast", (el) => el.className),
+      /text-bg-danger/,
+    );
+    assert.equal(await creator.isDisabled("#send-file"), false);
   });
 });
 

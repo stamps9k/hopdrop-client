@@ -82,6 +82,23 @@ export interface PeerOption {
   verified: boolean;
 }
 
+// What the Send tab's progress bar shows. The selected file's name is
+// tracked here in room_ui.mts (it changes on file selection, without
+// index.mts being involved), so the states don't carry it.
+//   idle        empty bar - nothing sent yet since the file was chosen
+//   sending     orange, animated stripes, filling as chunks go out
+//   confirming  orange, full, waiting for the receiver to confirm
+//   delivered   green - the receiver confirmed the file and its hash
+//   failed      red, with the reason underneath
+export type SendState =
+  | { kind: "idle" }
+  | { kind: "sending"; percent: number }
+  | { kind: "confirming" }
+  | { kind: "delivered"; recipient: string }
+  | { kind: "failed"; reason: string };
+
+export type ToastVariant = "success" | "danger";
+
 export interface RoomUiCallbacks {
   on_connect: (signaling_url: string) => void;
   on_disconnect: () => void;
@@ -113,8 +130,12 @@ export interface RoomUi {
   set_room_status(state: "disconnected" | "waiting" | "joined"): void;
   log(label: string, data?: unknown): void;
   set_peer_options(peers: PeerOption[]): void;
-  set_send_progress(percent: number, label: string): void;
-  hide_send_progress(): void;
+  // Sending and confirming also lock the file picker and Send button, so a
+  // new file can't be chosen or sent until the transfer has finished.
+  set_send_state(state: SendState): void;
+  // A short notice in the corner that fades after 5 seconds, visible
+  // whichever tab is open.
+  show_toast(variant: ToastVariant, message: string): void;
   add_downloaded_file(
     file_name: string,
     url: string,
@@ -228,11 +249,20 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const send_file_button = require_element<HTMLButtonElement>("send-file");
   const dropzone_el = require_element<HTMLElement>("dropzone");
   const dropzone_label_el = require_element<HTMLElement>("dropzone-label");
-  const send_progress_el =
-    require_element<HTMLProgressElement>("send-progress");
+  const send_progress_el = require_element<HTMLElement>("send-progress");
+  const send_progress_bar_el =
+    require_element<HTMLElement>("send-progress-bar");
+  const send_progress_file_el =
+    require_element<HTMLElement>("send-progress-file");
   const send_progress_label_el = require_element<HTMLElement>(
     "send-progress-label",
   );
+  const transfer_toast_el = require_element<HTMLElement>("transfer-toast");
+  const transfer_toast_body_el = require_element<HTMLElement>(
+    "transfer-toast-body",
+  );
+  // True while a transfer is sending or awaiting confirmation.
+  let send_locked = false;
   const log_el = require_element<HTMLElement>("log");
   const downloads_el = require_element<HTMLElement>("downloads");
   let downloads_has_content = false;
@@ -575,20 +605,161 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
     dropzone_label_el.textContent = file.name;
   }
 
+  const SEND_BAR_STATE_CLASSES = [
+    "progress-bar-striped",
+    "progress-bar-animated",
+    "send-progress-active",
+    "bg-success",
+    "bg-danger",
+  ];
+
+  function render_send_bar(
+    percent: number,
+    classes: string[],
+    label: string,
+  ): void {
+    send_progress_bar_el.classList.remove(...SEND_BAR_STATE_CLASSES);
+    send_progress_bar_el.classList.add(...classes);
+    send_progress_bar_el.style.width = `${percent}%`;
+    send_progress_el.setAttribute("aria-valuenow", String(percent));
+    // Silenced while sending, or a screen reader would read out every
+    // percent; the outcome is announced by the toast, and messages like
+    // "Choose a file first" are still read out.
+    send_progress_label_el.setAttribute(
+      "aria-live",
+      classes.includes("progress-bar-animated") ? "off" : "polite",
+    );
+    send_progress_label_el.textContent = label;
+  }
+
+  function set_send_locked(locked: boolean): void {
+    send_locked = locked;
+    send_file_button.disabled = locked;
+    file_input.disabled = locked;
+    dropzone_el.classList.toggle("opacity-50", locked);
+    // aria-disabled also drives the index.html rule that makes the locked
+    // dropzone ignore the pointer (and so its hover styling).
+    dropzone_el.setAttribute("aria-disabled", String(locked));
+    dropzone_el.tabIndex = locked ? -1 : 0;
+  }
+
+  // A newly chosen file resets the bar to empty and puts its name at the
+  // end of it.
+  function select_file(file: File | undefined): void {
+    show_dropped_file(file);
+    send_progress_file_el.textContent = file?.name ?? "No file selected";
+    send_progress_file_el.title = file?.name ?? "";
+    render_send_bar(0, [], "");
+  }
+
+  function set_send_state(state: SendState): void {
+    switch (state.kind) {
+      case "idle":
+        set_send_locked(false);
+        render_send_bar(0, [], "");
+        break;
+      case "sending": {
+        set_send_locked(true);
+        const percent = Math.max(0, Math.min(100, Math.round(state.percent)));
+        render_send_bar(
+          percent,
+          [
+            "progress-bar-striped",
+            "progress-bar-animated",
+            "send-progress-active",
+          ],
+          `Sending... ${percent}%`,
+        );
+        break;
+      }
+      case "confirming":
+        set_send_locked(true);
+        render_send_bar(
+          100,
+          [
+            "progress-bar-striped",
+            "progress-bar-animated",
+            "send-progress-active",
+          ],
+          "Waiting for the other device to confirm...",
+        );
+        break;
+      case "delivered":
+      case "failed":
+        set_send_locked(false);
+        if (state.kind === "delivered") {
+          render_send_bar(
+            100,
+            ["bg-success"],
+            `Delivered to ${state.recipient} - checked and intact`,
+          );
+        } else {
+          render_send_bar(100, ["bg-danger"], `Failed: ${state.reason}`);
+        }
+        // Cleared so choosing the same file again still counts as a new
+        // selection (a file input doesn't fire "change" for an unchanged
+        // value). The bar keeps the finished file's name and colour until
+        // then.
+        file_input.value = "";
+        show_dropped_file(undefined);
+        break;
+    }
+  }
+
+  function show_toast(variant: ToastVariant, message: string): void {
+    transfer_toast_el.classList.remove("text-bg-success", "text-bg-danger");
+    transfer_toast_el.classList.add(`text-bg-${variant}`);
+    // Failures interrupt a screen reader; successes wait their turn.
+    transfer_toast_el.setAttribute(
+      "role",
+      variant === "danger" ? "alert" : "status",
+    );
+    transfer_toast_el.setAttribute(
+      "aria-live",
+      variant === "danger" ? "assertive" : "polite",
+    );
+    transfer_toast_body_el.textContent = message;
+    window.bootstrap.Toast.getOrCreateInstance(transfer_toast_el, {
+      delay: 5000,
+    }).show();
+  }
+
+  // A file dropped anywhere the dropzone doesn't handle - elsewhere on the
+  // page, or on the dropzone itself while it's locked and ignoring the
+  // pointer - would otherwise be opened by the browser in place of hopdrop,
+  // ending any transfer in progress.
+  // Files only, so dragging text into the name or room code box still works.
+  const ignore_stray_file_drop = (event: DragEvent): void => {
+    if (event.dataTransfer?.types.includes("Files") === true) {
+      event.preventDefault();
+    }
+  };
+  window.addEventListener("dragover", ignore_stray_file_drop);
+  window.addEventListener("drop", ignore_stray_file_drop);
+
   dropzone_el.addEventListener("click", () => {
+    if (send_locked) {
+      return;
+    }
     file_input.click();
   });
   dropzone_el.addEventListener("keydown", (event) => {
+    if (send_locked) {
+      return;
+    }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       file_input.click();
     }
   });
   file_input.addEventListener("change", () => {
-    show_dropped_file(file_input.files?.[0]);
+    select_file(file_input.files?.[0]);
   });
   dropzone_el.addEventListener("dragover", (event) => {
     event.preventDefault();
+    if (send_locked) {
+      return;
+    }
     dropzone_el.classList.add("border-accent-subtle", "bg-accent-2-subtle");
   });
   dropzone_el.addEventListener("dragleave", () => {
@@ -597,13 +768,16 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   dropzone_el.addEventListener("drop", (event) => {
     event.preventDefault();
     dropzone_el.classList.remove("border-accent-subtle", "bg-accent-2-subtle");
+    if (send_locked) {
+      return;
+    }
     const data_transfer = event.dataTransfer;
     const dropped_file = data_transfer?.files?.[0];
     if (data_transfer === null || dropped_file === undefined) {
       return;
     }
     file_input.files = data_transfer.files;
-    show_dropped_file(dropped_file);
+    select_file(dropped_file);
   });
 
   send_file_button.addEventListener("click", () => {
@@ -611,10 +785,12 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
     const file = file_input.files?.[0];
     if (device_id === "") {
       ui_log("select a peer first");
+      send_progress_label_el.textContent = "Choose a recipient first";
       return;
     }
     if (file === undefined) {
       ui_log("choose a file first");
+      send_progress_label_el.textContent = "Choose a file first";
       return;
     }
     callbacks.on_send_file(device_id, file);
@@ -690,16 +866,9 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
       }
     },
 
-    set_send_progress(percent, label) {
-      send_progress_el.style.display = "inline-block";
-      send_progress_el.value = percent;
-      send_progress_label_el.textContent = label;
-    },
+    set_send_state,
 
-    hide_send_progress() {
-      send_progress_el.style.display = "none";
-      send_progress_label_el.textContent = "";
-    },
+    show_toast,
 
     add_downloaded_file(file_name, url, hash_verified) {
       if (!downloads_has_content) {

@@ -1,8 +1,7 @@
 // Thin wrapper that listens on an actual RTCDataChannel and drives the pure
-// logic in chunking.mts and file_transfer_protocol.mts. Not unit tested for
-// the same reason as file_sender.mts - the byte-level logic is already
-// covered by those modules' tests; what's left is real channel I/O,
-// verified by hand.
+// logic in chunking.mts and file_transfer_protocol.mts. Tested together
+// with file_sender.mts against a fake channel pair in
+// test/file_transfer.test.mts.
 //
 // Wire format expected (matches what file_sender.mts sends): one JSON
 // "file-start" string message, then that file's chunks as raw ArrayBuffer
@@ -10,6 +9,12 @@
 // relies on the data channel's default ordered/reliable delivery and just
 // counts chunks as they arrive. After a file completes, the channel is
 // ready for another file-start (sequential transfers over one channel).
+//
+// Once a file is rebuilt and its hash checked, a file-complete message goes
+// back to the sender with the result, so the sender can report the file as
+// delivered (or as corrupted). file-complete messages arriving here are
+// confirmations for this device's own sends - file_sender.mts handles
+// those, so they're ignored.
 
 import {
   add_chunk,
@@ -19,7 +24,10 @@ import {
   verify_sha256,
   type ChunkBuffer,
 } from "./chunking.mjs";
-import { parse_file_start_message } from "./file_transfer_protocol.mjs";
+import {
+  build_file_complete_message,
+  parse_file_control_message,
+} from "./file_transfer_protocol.mjs";
 
 export interface FileReceiveStart {
   file_name: string;
@@ -69,10 +77,39 @@ export function attach_file_receiver(
 ): FileReceiver {
   let active: ActiveTransfer | null = null;
 
-  async function finalize_active(finished: ActiveTransfer): Promise<void> {
+  // Best effort: if the channel has closed, the sender will see that too
+  // and report the transfer as failed on its own.
+  function send_confirmation(
+    finished: ActiveTransfer,
+    hash_verified: boolean,
+  ): void {
     try {
-      const data = reassemble(finished.chunk_buffer);
-      const hash_verified = await verify_sha256(data, finished.sha256_hex);
+      channel.send(
+        build_file_complete_message({
+          file_name: finished.file_name,
+          sha256_hex: finished.sha256_hex,
+          hash_verified,
+        }),
+      );
+    } catch {
+      // Nothing more to do - see above.
+    }
+  }
+
+  async function finalize_active(finished: ActiveTransfer): Promise<void> {
+    let data: Uint8Array;
+    let hash_verified: boolean;
+    try {
+      data = reassemble(finished.chunk_buffer);
+      hash_verified = await verify_sha256(data, finished.sha256_hex);
+    } catch (err) {
+      send_confirmation(finished, false);
+      const error = err instanceof Error ? err : new Error(String(err));
+      handlers.on_error?.(error);
+      return;
+    }
+    send_confirmation(finished, hash_verified);
+    try {
       const blob = new Blob([data as unknown as BlobPart]);
       handlers.on_complete?.({
         file_name: finished.file_name,
@@ -87,11 +124,14 @@ export function attach_file_receiver(
   }
 
   function handle_control_message(raw: string): void {
-    const result = parse_file_start_message(raw);
+    const result = parse_file_control_message(raw);
     if (!result.ok) {
       handlers.on_error?.(
         new Error(`invalid control message: ${result.error}`),
       );
+      return;
+    }
+    if (result.message.type !== "file-start") {
       return;
     }
 

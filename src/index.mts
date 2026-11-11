@@ -722,34 +722,53 @@ const ui = create_room_ui({
   },
 
   on_send_file(device_id, file) {
+    const recipient = connected_peer_names.get(device_id) ?? device_id;
     const channel = open_channels.get(device_id);
     if (channel === undefined) {
+      const reason = `${recipient} is no longer connected`;
       ui.log("no open channel for the selected peer");
+      ui.set_send_state({ kind: "failed", reason });
+      ui.show_toast("danger", `${file.name} wasn't sent: ${reason}`);
       return;
     }
 
-    ui.set_send_progress(0, `sending ${file.name}...`);
+    ui.log(`sending "${file.name}" to ${recipient}`, { size: file.size });
+    ui.set_send_state({ kind: "sending", percent: 0 });
 
     send_file(channel, file, {
       on_progress: (progress) => {
-        const percent = Math.round(
-          (progress.bytes_sent / progress.total_bytes) * 100,
-        );
-        ui.set_send_progress(
-          percent,
-          `${file.name}: ${progress.chunks_sent}/${progress.total_chunks} chunks (${percent}%)`,
-        );
+        ui.set_send_state({
+          kind: "sending",
+          percent: (progress.bytes_sent / progress.total_bytes) * 100,
+        });
       },
-      on_complete: (file_name) => {
-        ui.log(`send complete: ${file_name}`);
-        ui.set_send_progress(100, `${file_name}`);
+      on_sent: () => {
+        ui.log(`all of "${file.name}" sent - waiting for confirmation`);
+        ui.set_send_state({ kind: "confirming" });
+      },
+      on_complete: (result) => {
+        ui.log(`send confirmed: ${result.file_name}`, {
+          hash_verified: result.hash_verified,
+        });
+        if (result.hash_verified) {
+          ui.set_send_state({ kind: "delivered", recipient });
+          ui.show_toast("success", `${file.name} delivered to ${recipient}`);
+        } else {
+          const reason = `${recipient} received a corrupted copy (hash mismatch) - try sending it again`;
+          ui.set_send_state({ kind: "failed", reason });
+          ui.show_toast("danger", `${file.name}: ${reason}`);
+        }
       },
       on_error: (error) => {
         ui.log("send error", error.message);
-        ui.set_send_progress(0, `error: ${error.message}`);
+        ui.set_send_state({ kind: "failed", reason: error.message });
+        ui.show_toast(
+          "danger",
+          `${file.name} failed to send: ${error.message}`,
+        );
       },
     }).catch(() => {
-      // Already logged via on_error above.
+      // Already reported via on_error above.
     });
   },
 });
