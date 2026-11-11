@@ -191,6 +191,18 @@ async function wait_for_peers(page: Page, count: number): Promise<string[]> {
   return peer_labels(page);
 }
 
+// The toasts currently on a page, as "variant: message".
+async function toasts(page: Page): Promise<string[]> {
+  return page.$$eval("#toast-container .toast", (elements) =>
+    elements.map((el) => {
+      const variant = el.classList.contains("text-bg-danger")
+        ? "danger"
+        : "success";
+      return `${variant}: ${el.textContent?.trim() ?? ""}`;
+    }),
+  );
+}
+
 function room_code_of(link: string): string {
   return new URL(link).hash.slice(1).split(/[.@]/)[0] ?? "";
 }
@@ -523,15 +535,10 @@ describe("file transfer", () => {
     // the sender has switched to another tab.
     await creator.click("#send-file");
     await creator.click("#connect-tab");
-    await creator.waitForSelector("#transfer-toast.show", { timeout: TIMEOUT });
-    assert.match(
-      (await creator.textContent("#transfer-toast")) ?? "",
-      /first\.txt delivered to Bravo/,
-    );
-    assert.match(
-      await creator.$eval("#transfer-toast", (el) => el.className),
-      /text-bg-success/,
-    );
+    await creator.waitForSelector(".toast.show", { timeout: TIMEOUT });
+    assert.deepEqual(await toasts(creator), [
+      "success: first.txt delivered to Bravo",
+    ]);
     assert.match(await bar_classes(), /bg-success/);
     assert.doesNotMatch(await bar_classes(), /progress-bar-animated/);
     assert.equal(await bar_width(), "100%");
@@ -572,12 +579,18 @@ describe("file transfer", () => {
       (await joiner.textContent("#downloads")) ?? "",
       /first\.txt \(hash verified\)/,
     );
+    // The receiving side gets its own toast.
+    await joiner.waitForSelector(".toast.show", { timeout: TIMEOUT });
+    assert.deepEqual(await toasts(joiner), [
+      "success: Received first.txt from Alpha",
+    ]);
 
-    // The toast fades out by itself after about 5 seconds.
-    await creator.waitForSelector("#transfer-toast", {
-      state: "hidden",
-      timeout: 8000,
-    });
+    // Toasts fade out by themselves after about 5 seconds, and are removed.
+    await creator.waitForFunction(
+      () => document.querySelectorAll("#toast-container .toast").length === 0,
+      null,
+      { timeout: 8000 },
+    );
 
     // 6. A new file resets the bar to empty and swaps the name.
     await creator.click("#send-tab");
@@ -616,10 +629,12 @@ describe("file transfer", () => {
       (await creator.textContent("#send-progress-label")) ?? "",
       /^Failed: /,
     );
-    await creator.waitForSelector("#transfer-toast.show", { timeout: TIMEOUT });
+    await creator.waitForSelector(".toast.show", { timeout: TIMEOUT });
+    const failure_toasts = await toasts(creator);
+    assert.equal(failure_toasts.length, 1);
     assert.match(
-      await creator.$eval("#transfer-toast", (el) => el.className),
-      /text-bg-danger/,
+      failure_toasts[0] ?? "",
+      /^danger: second\.bin failed to send: /,
     );
     assert.equal(await creator.isDisabled("#send-file"), false);
   });

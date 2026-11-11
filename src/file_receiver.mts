@@ -15,6 +15,11 @@
 // delivered (or as corrupted). file-complete messages arriving here are
 // confirmations for this device's own sends - file_sender.mts handles
 // those, so they're ignored.
+//
+// If the channel closes, or the receiver is detached, part-way through a
+// file, on_error gets a TransferInterruptedError naming it - otherwise a
+// sender vanishing mid-transfer would leave this side with no sign that
+// anything was ever on its way.
 
 import {
   add_chunk,
@@ -59,6 +64,15 @@ export interface FileReceiverHandlers {
 
 export interface FileReceiver {
   detach(): void;
+}
+
+export class TransferInterruptedError extends Error {
+  readonly file_name: string;
+  constructor(file_name: string) {
+    super(`the connection closed before "${file_name}" finished arriving`);
+    this.name = "TransferInterruptedError";
+    this.file_name = file_name;
+  }
 }
 
 interface ActiveTransfer {
@@ -219,11 +233,30 @@ export function attach_file_receiver(
     );
   }
 
-  channel.addEventListener("message", handle_message);
+  function abandon_active(): void {
+    if (active === null) {
+      return;
+    }
+    const interrupted = active;
+    active = null;
+    handlers.on_error?.(new TransferInterruptedError(interrupted.file_name));
+  }
 
-  return {
-    detach() {
-      channel.removeEventListener("message", handle_message);
-    },
-  };
+  function handle_close(): void {
+    detach();
+  }
+
+  // Also reports an interrupted transfer: index.mts detaches a peer's
+  // receiver as part of closing that peer, which can happen before this
+  // module's own close listener would have run.
+  function detach(): void {
+    channel.removeEventListener("message", handle_message);
+    channel.removeEventListener("close", handle_close);
+    abandon_active();
+  }
+
+  channel.addEventListener("message", handle_message);
+  channel.addEventListener("close", handle_close);
+
+  return { detach };
 }

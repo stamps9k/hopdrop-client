@@ -14,7 +14,9 @@ import {
 } from "../src/file_sender.mjs";
 import {
   attach_file_receiver,
+  TransferInterruptedError,
   type FileReceiveComplete,
+  type FileReceiver,
 } from "../src/file_receiver.mjs";
 import { build_file_complete_message } from "../src/file_transfer_protocol.mjs";
 import { DEFAULT_CHUNK_SIZE_BYTES } from "../src/chunking.mjs";
@@ -91,15 +93,17 @@ function channel_pair(): { sender: FakeChannel; receiver: FakeChannel } {
 interface ReceiverLog {
   completed: FileReceiveComplete[];
   errors: Error[];
+  receiver: FileReceiver;
 }
 
 function attach_receiver(channel: FakeChannel): ReceiverLog {
-  const log: ReceiverLog = { completed: [], errors: [] };
-  attach_file_receiver(as_channel(channel), {
-    on_complete: (result) => log.completed.push(result),
-    on_error: (error) => log.errors.push(error),
+  const completed: FileReceiveComplete[] = [];
+  const errors: Error[] = [];
+  const receiver = attach_file_receiver(as_channel(channel), {
+    on_complete: (result) => completed.push(result),
+    on_error: (error) => errors.push(error),
   });
-  return log;
+  return { completed, errors, receiver };
 }
 
 function file_of(size: number, name = "test.bin"): File {
@@ -356,5 +360,72 @@ describe("confirmation_timeout_for", () => {
     assert.equal(confirmation_timeout_for(50 * 1024 * 1024), 16_000);
     assert.equal(confirmation_timeout_for(50 * 1024 * 1024 + 1), 17_000);
     assert.equal(confirmation_timeout_for(2 * 1024 ** 3), 56_000);
+  });
+});
+
+describe("attach_file_receiver interruptions", () => {
+  // Sends a file, closing the channel (or running `interrupt`) once a
+  // couple of chunks have arrived - i.e. part-way through.
+  async function interrupt_after_two_chunks(
+    interrupt: (sender: FakeChannel, received: ReceiverLog) => void,
+  ): Promise<ReceiverLog> {
+    const { sender, receiver } = channel_pair();
+    const received = attach_receiver(receiver);
+    let chunks_seen = 0;
+    sender.intercept = (payload) => {
+      if (is_chunk(payload) && ++chunks_seen === 3) {
+        interrupt(sender, received);
+        return null;
+      }
+      return payload;
+    };
+    await send_file(
+      as_channel(sender),
+      file_of(DEFAULT_CHUNK_SIZE_BYTES * 6, "photo.jpg"),
+      {},
+      { confirmation_timeout_ms: 50 },
+    ).catch(() => undefined);
+    await settle_messages();
+    return received;
+  }
+
+  test("reports a file cut off by the channel closing", async () => {
+    const received = await interrupt_after_two_chunks((sender) =>
+      setTimeout(() => sender.close(), 10),
+    );
+    assert.deepEqual(received.completed, []);
+    assert.equal(received.errors.length, 1);
+    const error = received.errors[0];
+    assert.ok(error instanceof TransferInterruptedError);
+    assert.equal(error.file_name, "photo.jpg");
+  });
+
+  test("reports a file cut off by the receiver being detached", async () => {
+    const received = await interrupt_after_two_chunks((_sender, log) =>
+      setTimeout(() => log.receiver.detach(), 10),
+    );
+    assert.equal(received.errors.length, 1);
+    assert.ok(received.errors[0] instanceof TransferInterruptedError);
+  });
+
+  test("reports an interruption only once, however the receiver is shut down", async () => {
+    const received = await interrupt_after_two_chunks((sender, log) =>
+      setTimeout(() => {
+        log.receiver.detach();
+        sender.close();
+        log.receiver.detach();
+      }, 10),
+    );
+    assert.equal(received.errors.length, 1);
+  });
+
+  test("reports nothing when closed between files", async () => {
+    const { sender, receiver } = channel_pair();
+    const received = attach_receiver(receiver);
+    await send_file(as_channel(sender), file_of(100));
+    sender.close();
+    received.receiver.detach();
+    assert.equal(received.completed.length, 1);
+    assert.deepEqual(received.errors, []);
   });
 });

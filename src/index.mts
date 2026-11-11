@@ -30,7 +30,11 @@ import {
   get_rtc_config_when_ready,
 } from "./turn_state.mjs";
 import { send_file } from "./file_sender.mjs";
-import { attach_file_receiver, type FileReceiver } from "./file_receiver.mjs";
+import {
+  attach_file_receiver,
+  TransferInterruptedError,
+  type FileReceiver,
+} from "./file_receiver.mjs";
 import {
   build_join_url,
   choose_room_key_source,
@@ -256,6 +260,7 @@ async function get_or_create_peer_connection(
               : "UNVERIFIED (unencrypted signaling - a device joined by typed room code)",
           );
 
+          const sender_name = connected_peer_names.get(device_id) ?? device_id;
           const receiver = attach_file_receiver(channel, {
             on_start: (info) => {
               ui.log(`receiving "${info.file_name}" from ${device_id}`, {
@@ -280,9 +285,26 @@ async function get_or_create_peer_connection(
                 url,
                 result.hash_verified,
               );
+              if (result.hash_verified) {
+                ui.show_toast(
+                  "success",
+                  `Received ${result.file_name} from ${sender_name}`,
+                );
+              } else {
+                ui.show_toast(
+                  "danger",
+                  `${result.file_name} from ${sender_name} arrived corrupted (hash mismatch) - ask for it to be sent again`,
+                );
+              }
             },
             on_error: (error) => {
               ui.log(`file receiver error [${device_id}]`, error.message);
+              if (error instanceof TransferInterruptedError) {
+                ui.show_toast(
+                  "danger",
+                  `${error.file_name} from ${sender_name} didn't finish arriving - the connection closed`,
+                );
+              }
             },
           });
           file_receivers.set(device_id, receiver);

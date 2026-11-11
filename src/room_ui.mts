@@ -257,10 +257,7 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
   const send_progress_label_el = require_element<HTMLElement>(
     "send-progress-label",
   );
-  const transfer_toast_el = require_element<HTMLElement>("transfer-toast");
-  const transfer_toast_body_el = require_element<HTMLElement>(
-    "transfer-toast-body",
-  );
+  const toast_container_el = require_element<HTMLElement>("toast-container");
   // True while a transfer is sending or awaiting confirmation.
   let send_locked = false;
   const log_el = require_element<HTMLElement>("log");
@@ -706,20 +703,36 @@ export function create_room_ui(callbacks: RoomUiCallbacks): RoomUi {
     }
   }
 
+  // Each toast is its own element, so two at once (say, this device's send
+  // finishing while a file from the other device arrives) stack rather than
+  // one replacing the other. Removed from the page once it has faded out.
   function show_toast(variant: ToastVariant, message: string): void {
-    transfer_toast_el.classList.remove("text-bg-success", "text-bg-danger");
-    transfer_toast_el.classList.add(`text-bg-${variant}`);
+    const toast_el = document.createElement("div");
+    toast_el.className = `toast align-items-center border-0 text-bg-${variant}`;
     // Failures interrupt a screen reader; successes wait their turn.
-    transfer_toast_el.setAttribute(
-      "role",
-      variant === "danger" ? "alert" : "status",
-    );
-    transfer_toast_el.setAttribute(
+    toast_el.setAttribute("role", variant === "danger" ? "alert" : "status");
+    toast_el.setAttribute(
       "aria-live",
       variant === "danger" ? "assertive" : "polite",
     );
-    transfer_toast_body_el.textContent = message;
-    window.bootstrap.Toast.getOrCreateInstance(transfer_toast_el, {
+    toast_el.setAttribute("aria-atomic", "true");
+
+    const row_el = document.createElement("div");
+    row_el.className = "d-flex";
+    const body_el = document.createElement("div");
+    body_el.className = "toast-body text-start";
+    body_el.textContent = message;
+    const close_el = document.createElement("button");
+    close_el.type = "button";
+    close_el.className = "btn-close btn-close-white me-2 m-auto";
+    close_el.setAttribute("data-bs-dismiss", "toast");
+    close_el.setAttribute("aria-label", "Close");
+    row_el.append(body_el, close_el);
+    toast_el.append(row_el);
+
+    toast_container_el.append(toast_el);
+    toast_el.addEventListener("hidden.bs.toast", () => toast_el.remove());
+    window.bootstrap.Toast.getOrCreateInstance(toast_el, {
       delay: 5000,
     }).show();
   }
